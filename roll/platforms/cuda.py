@@ -1,5 +1,6 @@
 from .platform import Platform
 from ..utils.logging import get_logger
+import os
 
 import torch
 
@@ -38,6 +39,21 @@ class CudaPlatform(Platform):
             "NCCL_CUMEM_ENABLE": "0",  # https://github.com/NVIDIA/nccl/issues/1234
             "NCCL_NVLS_ENABLE": "0",
         }
+        # Ensure Ray actors inherit network selection and master address when
+        # running single-node experiments where loopback is preferred.
+        # This prevents mismatches where some actors use the physical IP
+        # (e.g. 10.x.x.x) while others use 127.0.0.1, which causes
+        # rendezvous keys (MASTER_ADDR_PORT) to be inconsistent.
+        env_vars.update(
+            {
+                "NCCL_SOCKET_IFNAME": os.environ.get("NCCL_SOCKET_IFNAME", "lo"),
+                "GLOO_SOCKET_IFNAME": os.environ.get("GLOO_SOCKET_IFNAME", "lo"),
+                "TP_SOCKET_IFNAME": os.environ.get("TP_SOCKET_IFNAME", "lo"),
+                # If user set MASTER_ADDR in the environment (e.g. via run_osworld.sh),
+                # pass it through to Ray actors; otherwise default to loopback.
+                "MASTER_ADDR": os.environ.get("MASTER_ADDR", "127.0.0.1"),
+            }
+        )
         return env_vars
 
     @classmethod

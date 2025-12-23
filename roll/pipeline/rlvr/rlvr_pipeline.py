@@ -614,6 +614,25 @@ class RLVRPipeline(BasePipeline):
                     metrics_mgr.add_domain_metrics(domain, {"time/get_sample_level_mask": get_sample_level_mask_timer.last})
 
                     # 2. 处理reward相关策略
+                    # Ensure response_level_rewards exists: some rollout producers populate
+                    # `scores` (sequence-level tensor) while downstream RL code expects
+                    # `response_level_rewards`. If the latter is missing but `scores`
+                    # exists, synthesize it here by summing scores per sample.
+                    try:
+                        if "response_level_rewards" not in domain_batch.batch and "scores" in domain_batch.batch:
+                            # scores may be token-level masks/tensors; reduce to per-sample scalar
+                            try:
+                                # if scores is (bsz, seqlen) -> sum over last dim
+                                response_level = domain_batch.batch["scores"].sum(dim=-1).float()
+                            except Exception:
+                                # fallback: try squeeze
+                                response_level = domain_batch.batch["scores"].squeeze(-1).float()
+                            domain_batch.batch["response_level_rewards"] = response_level
+                            domain_batch.meta_info.setdefault("metrics", {})
+                            domain_batch.meta_info["metrics"]["debug/derived_response_level_from_scores"] = 1
+                    except Exception:
+                        logger.exception("Failed to derive response_level_rewards from scores")
+
                     with Timer(name="reward_postprocess", logger=None) as reward_postprocess_timer:
                         domain_batch, response_level_metrics = reward_postprocess(
                             domain_batch, self.pipeline_config, self.running

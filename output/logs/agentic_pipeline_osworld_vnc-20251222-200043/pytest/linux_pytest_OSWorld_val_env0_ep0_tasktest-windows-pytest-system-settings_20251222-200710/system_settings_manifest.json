@@ -1,0 +1,9 @@
+[
+  {
+    "id": "apps_use_light_theme",
+    "type": "registry",
+    "path": "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+    "name": "AppsUseLightTheme",
+    "expected": 1
+  }
+]

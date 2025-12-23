@@ -172,5 +172,7 @@ cython_debug/
 log
 # examples
 
-output/
+# output/
 .vscode/
+
+wandb

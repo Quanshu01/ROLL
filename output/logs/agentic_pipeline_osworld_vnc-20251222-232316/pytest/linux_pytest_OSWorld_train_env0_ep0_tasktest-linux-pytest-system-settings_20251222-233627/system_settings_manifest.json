@@ -1,0 +1,8 @@
+[
+  {
+    "id": "dark_mode",
+    "type": "gsettings",
+    "command": "gsettings get org.gnome.desktop.interface color-scheme",
+    "expected": "default"
+  }
+]

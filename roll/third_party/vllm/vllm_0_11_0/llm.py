@@ -1,5 +1,6 @@
 import os
 import queue
+import inspect
 import time
 from typing import Any, Dict, Iterable, List, Optional, Union
 
@@ -235,10 +236,24 @@ class Llm0110(LLM):
                 # in v1, input_preprocessor is in engine.processor
                 processor = getattr(self.llm_engine, "processor", None)
                 input_preprocessor = processor.input_preprocessor if processor else self.llm_engine.input_preprocessor
-                preprocessed_inputs = input_preprocessor.preprocess(
-                    prompt={"prompt_token_ids": token_ids, "multi_modal_data": multi_modal_data[i]},
-                    lora_request=lora_request,
-                )
+                # 直接调用 preprocess，如果 lora_request 为 None 则不传该参数
+                # 如果方法不支持 lora_request 参数，会抛出 TypeError，我们捕获并回退
+                if lora_request is not None:
+                    try:
+                        preprocessed_inputs = input_preprocessor.preprocess(
+                            prompt={"prompt_token_ids": token_ids, "multi_modal_data": multi_modal_data[i]},
+                            lora_request=lora_request,
+                        )
+                    except TypeError:
+                        # 目标环境的 preprocess 不支持 lora_request 参数
+                        preprocessed_inputs = input_preprocessor.preprocess(
+                            prompt={"prompt_token_ids": token_ids, "multi_modal_data": multi_modal_data[i]},
+                        )
+                else:
+                    # lora_request 为 None，不传该参数
+                    preprocessed_inputs = input_preprocessor.preprocess(
+                        prompt={"prompt_token_ids": token_ids, "multi_modal_data": multi_modal_data[i]},
+                    )
                 # in v1, engine does not use a input_processor
                 processed_inputs = (
                     self.llm_engine.input_processor(preprocessed_inputs)

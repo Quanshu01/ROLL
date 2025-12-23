@@ -148,6 +148,9 @@ class DeepSpeedInferStrategy(InferenceStrategy):
         with adapter_context:
             for data in micro_batches:
                 input_ids = data.batch["input_ids"]
+                # Ensure embedding indices stay integer typed; float tensors crash torch.embedding.
+                if input_ids.dtype not in (torch.int64, torch.int32, torch.int16, torch.int8, torch.uint8):
+                    input_ids = input_ids.long()
                 attention_mask = data.batch["attention_mask"]
                 position_ids = data.batch["position_ids"]
                 forward_args = data.meta_info.get("forward_args", {})
@@ -211,6 +214,9 @@ class DeepSpeedInferStrategy(InferenceStrategy):
 
     def generate(self, batch: DataProto, generation_config):
         input_ids = batch.batch["input_ids"]  # (bs, prompt_length)
+        # Harden against float tensors slipping in from upstream.
+        if input_ids.dtype not in (torch.int64, torch.int32, torch.int16, torch.int8, torch.uint8):
+            input_ids = input_ids.long()
         attention_mask = batch.batch["attention_mask"]  # left-padded attention_mask
 
         output = self.model.generate(
@@ -412,6 +418,9 @@ class DeepSpeedTrainStrategy(DeepSpeedInferStrategy, TrainStrategy):
         for step in range(mini_steps):
             data: DataProto = next(data_iter)
             input_ids = data.batch["input_ids"]
+            # Ensure embedding indices are integer typed; float tensors will crash torch.embedding.
+            if input_ids.dtype not in (torch.int64, torch.int32, torch.int16, torch.int8, torch.uint8):
+                input_ids = input_ids.long()
             attention_mask = data.batch["attention_mask"]
             position_ids = data.batch["position_ids"]
             forward_args = data.meta_info.get("forward_args", {})

@@ -1,6 +1,7 @@
 import logging
 import os
 import socket
+import time
 from concurrent import futures
 from dataclasses import dataclass
 from typing import Dict
@@ -53,17 +54,149 @@ class Worker:
             name=STORAGE_NAME, get_if_exists=True, namespace=RAY_NAMESPACE
         ).remote()
 
+        # Coordination behavior:
+        # - rank 0: choose MASTER_ADDR/MASTER_PORT (respect external if provided),
+        #           verify port can be bound and fall back to free port if needed,
+        #           then write mapping to SharedStorage for others to read.
+        # - non-zero ranks: wait for leader to write MASTER_ADDR/MASTER_PORT into SharedStorage
+        #                  and adopt those values before continuing.
         if self.rank == 0:
-            master_addr = self.get_node_ip()
-            master_port = str(self.get_free_port())
+            master_addr = os.environ.get("MASTER_ADDR", self.get_node_ip())
+            master_port_env = os.environ.get("MASTER_PORT")
+
+            if master_port_env is not None:
+                # honor externally-provided port but ensure it's bindable; if not,
+                # fall back to allocating a free port and log a warning.
+                try_port = int(master_port_env)
+                bind_ok = False
+                try:
+                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    s.bind((master_addr, try_port))
+                    s.listen(1)
+                    s.close()
+                    bind_ok = True
+                except Exception:
+                    bind_ok = False
+
+                if not bind_ok:
+                    self.logger.warning(f"external MASTER_PORT={try_port} on {master_addr} is not bindable; allocating a different port")
+                    master_port = str(self.get_free_port())
+                else:
+                    master_port = str(try_port)
+                    # reserve the externally-provided port in SharedStorage so
+                    # other leaders/allocators do not pick it.
+                    try:
+                        master_addr_port_key = f"MASTER_ADDR_PORT:{master_addr}:{master_port}"
+                        ray.get(self.shared_storage.put.remote(master_addr_port_key, True))
+                        self.logger.warning(f"reserved MASTER_ADDR_PORT key={master_addr_port_key} for external port")
+                    except Exception:
+                        self.logger.exception("failed to reserve external MASTER_ADDR_PORT in SharedStorage")
+            else:
+                master_port = str(self.get_free_port())
+
             os.environ["MASTER_ADDR"] = master_addr
             os.environ["MASTER_PORT"] = master_port
 
-        self.master_addr = os.environ["MASTER_ADDR"]
-        self.master_port = int(os.environ["MASTER_PORT"])
-        self.shared_storage.put.remote(
-            self.cluster_name, {"MASTER_ADDR": self.master_addr, "MASTER_PORT": self.master_port}
+            # commit mapping for other workers
+            self.master_addr = master_addr
+            self.master_port = int(master_port)
+            # write below after diagnostics
+        else:
+            # non-leader: wait until leader publishes MASTER_ADDR/MASTER_PORT
+            wait_timeout = int(os.environ.get("MASTER_PUBLISH_TIMEOUT", 60))
+            poll_interval = 0.5
+            waited = 0.0
+            mapping = None
+            try:
+                while waited < wait_timeout:
+                    mapping = ray.get(self.shared_storage.get.remote(self.cluster_name))
+                    if mapping is not None and mapping.get("MASTER_ADDR") is not None and mapping.get("MASTER_PORT") is not None:
+                        break
+                    time.sleep(poll_interval)
+                    waited += poll_interval
+            except Exception:
+                self.logger.exception("error while waiting for leader to publish MASTER_ADDR/MASTER_PORT")
+
+            if mapping is None:
+                # fallback to environment values if SharedStorage not populated in time
+                self.logger.warning(f"did not observe leader mapping in SharedStorage within {wait_timeout}s; falling back to environment MASTER_ADDR/MASTER_PORT")
+                self.master_addr = os.environ.get("MASTER_ADDR", self.get_node_ip())
+                self.master_port = int(os.environ.get("MASTER_PORT", 0) or 0)
+            else:
+                self.master_addr = mapping.get("MASTER_ADDR")
+                self.master_port = int(mapping.get("MASTER_PORT"))
+        # Additional debug: log the environment variables that affect rendezvous
+        # This helps detect mismatches between actors (e.g., some using 127.0.0.1
+        # while others use a physical IP).
+        try:
+            _nccl_if = os.environ.get("NCCL_SOCKET_IFNAME")
+            _gloo_if = os.environ.get("GLOO_SOCKET_IFNAME")
+            _tp_if = os.environ.get("TP_SOCKET_IFNAME")
+        except Exception:
+            _nccl_if = _gloo_if = _tp_if = None
+        # Use WARNING so this shows up in actor logs regardless of INFO filtering.
+        self.logger.warning(
+            f"Worker init env: WORKER_NAME={self.worker_name} RANK={self.rank} MASTER_ADDR={self.master_addr} MASTER_PORT={self.master_port} NCCL_SOCKET_IFNAME={_nccl_if} GLOO_SOCKET_IFNAME={_gloo_if} TP_SOCKET_IFNAME={_tp_if}"
         )
+        # Dump a concise environment snapshot to a centralized file for
+        # cross-actor comparison and debugging. Filter out extremely long
+        # values to keep log readable.
+        try:
+            dump_path = os.path.join(os.getcwd(), "output", "logs", "actor_env_dumps.log")
+            with open(dump_path, "a", encoding="utf-8") as f:
+                f.write(f"[{self.worker_name} pid={os.getpid()}] MASTER_ADDR={self.master_addr} MASTER_PORT={self.master_port}\n")
+                for k in sorted(os.environ.keys()):
+                    v = os.environ.get(k, "")
+                    if len(v) > 200:
+                        v = v[:200] + "..."
+                    f.write(f"[{self.worker_name} pid={os.getpid()}] {k}={v}\n")
+                f.write("\n")
+        except Exception:
+            # best-effort; do not raise during worker init
+            self.logger.exception("failed to write actor env dump")
+
+        # Quick connectivity diagnostics: try connecting to MASTER_ADDR:MASTER_PORT
+        # (short timeout) and attempt a short bind test (best-effort).
+        try:
+            diag_msg = []
+            # TCP connect test
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(0.5)
+                s.connect((self.master_addr, int(self.master_port)))
+                s.close()
+                diag_msg.append(f"tcp_connect: success -> {self.master_addr}:{self.master_port}")
+            except Exception as e:
+                diag_msg.append(f"tcp_connect: fail -> {self.master_addr}:{self.master_port} err={e}")
+
+            # local bind test (non-blocking, will close immediately) - best-effort
+            try:
+                b = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                b.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                b.bind((self.master_addr, int(self.master_port)))
+                b.listen(1)
+                b.close()
+                diag_msg.append(f"local_bind: success -> {self.master_addr}:{self.master_port}")
+            except Exception as e:
+                diag_msg.append(f"local_bind: fail -> {self.master_addr}:{self.master_port} err={e}")
+
+            for m in diag_msg:
+                self.logger.warning(m)
+                try:
+                    with open(dump_path, "a", encoding="utf-8") as f:
+                        f.write(f"[{self.worker_name} pid={os.getpid()}] {m}\n")
+                except Exception:
+                    pass
+        except Exception:
+            self.logger.exception("connectivity diagnostics failed")
+        # leader should publish mapping (non-leaders may also re-put their view - cheap)
+        try:
+            self.shared_storage.put.remote(
+                self.cluster_name, {"MASTER_ADDR": self.master_addr, "MASTER_PORT": self.master_port}
+            )
+        except Exception:
+            self.logger.exception("failed to put MASTER_ADDR/MASTER_PORT to SharedStorage")
         # NOTE: 自定义Worker时根据需要配置rank_info
         self.rank_info = RankInfo(
             world_size=self.world_size,
@@ -98,10 +231,15 @@ class Worker:
         max_retry_count = int(os.environ.get("MAX_PORT_RETRY_COUNT", 1000))
         retry_count = 0
         master_port = collect_free_port()
+        # diagnostic logger for port allocation
+        _logger = get_logger()
+        _logger.warning(f"allocating MASTER_PORT for master_addr={master_addr}; initial_port={master_port}")
         while retry_count < max_retry_count:
             master_addr_port_key = f"MASTER_ADDR_PORT:{master_addr}:{master_port}"
+            _logger.warning(f"testing MASTER_ADDR_PORT key={master_addr_port_key} (attempt {retry_count})")
             if ray.get(shared_storage.get.remote(master_addr_port_key)) is None:
                 ray.get(shared_storage.put.remote(master_addr_port_key, True))
+                _logger.warning(f"reserved MASTER_ADDR_PORT key={master_addr_port_key}")
                 break
             master_port = collect_free_port()
             retry_count += 1

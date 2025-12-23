@@ -1,0 +1,27 @@
+{
+  "initial_snapshot": {},
+  "last_snapshot": {},
+  "finalized_files": [],
+  "snapshotted_steps": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "_debug_info": {
+    "inferred_from_manifest": null,
+    "get_vm_home_dir_result": "/home/vipuser",
+    "resolve_script_output": "None",
+    "target_root": "/home/vipuser",
+    "target_root_source": "from_home_dir",
+    "snapshot_diagnostics": {
+      "root_path": "/home/vipuser",
+      "error": "vm_client.run_command returned empty output",
+      "output_received": false
+    },
+    "snapshot_error": "vm_client.run_command returned empty output",
+    "snapshot_file_count": 0,
+    "snapshot_is_empty": true
+  }
+}

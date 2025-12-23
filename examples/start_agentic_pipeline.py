@@ -1,4 +1,5 @@
 import argparse
+import os
 
 from dacite import from_dict
 from hydra import compose, initialize
@@ -17,7 +18,17 @@ def main():
     args = parser.parse_args()
 
     initialize(config_path=args.config_path, job_name="app")
-    cfg = compose(config_name=args.config_name)
+
+    # 支持通过环境变量传入 Hydra 覆盖项（例如：
+    # HYDRA_OVERRIDES="exp_name=foo hydra.run.dir=./output/logs/foo"）
+    overrides_env = os.environ.get("HYDRA_OVERRIDES", "")
+    overrides = []
+    if overrides_env:
+        # 简单按空格分割覆盖项
+        overrides = overrides_env.split()
+        print(f"Applying Hydra overrides from HYDRA_OVERRIDES: {overrides}")
+
+    cfg = compose(config_name=args.config_name, overrides=overrides)
 
     print(OmegaConf.to_yaml(cfg, resolve=True))
 

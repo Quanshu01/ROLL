@@ -155,7 +155,7 @@ class InferenceStrategy(ABC):
         input_ids [[p, p, r, r, r, 0, 0]] p: prompt, r: response, 0: pad
         attention_mask(response_mask) [[0, 0, 1, 1, 1, 0, 0]]
         """
-        labels: torch.Tensor = input_ids[:, 1:].clone()
+        labels: torch.Tensor = input_ids[:, 1:].clone().long()
         labels[attention_mask[:, 1:] == 0] = 0  # avoid invalid token id
         log_probs = log_probs_from_logits(logits[:, :-1], labels)
         log_probs = log_probs * attention_mask[:, 1:]

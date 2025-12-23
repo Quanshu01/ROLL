@@ -37,8 +37,24 @@ class Cluster:
     ):
 
         self.cluster_name = name
+        # Resolve string path first; if None, attempt to fall back to worker_config.worker_cls
+        resolved = None
         if isinstance(worker_cls, str):
-            worker_cls = safe_import_class(worker_cls)
+            resolved = safe_import_class(worker_cls)
+        elif worker_cls is not None:
+            resolved = worker_cls
+
+        if resolved is None and hasattr(worker_config, "worker_cls"):
+            fallback = getattr(worker_config, "worker_cls")
+            if isinstance(fallback, str):
+                resolved = safe_import_class(fallback)
+            else:
+                resolved = fallback
+
+        if resolved is None:
+            raise ValueError(f"worker_cls is None for cluster {name}. Please set worker_cls in the configuration.")
+
+        worker_cls = resolved
 
         if not hasattr(worker_cls, "__ray_actor_class__"):
             logger.info(f"wrap {worker_cls.__name__} to ray.remote()")

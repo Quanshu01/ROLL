@@ -194,7 +194,15 @@ def compute_approx_kl(
 
 
 def log_probs_from_logits(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+    """
+    Compute log-probs of given labels from logits.
+
+    Note: some upstream code paths may accidentally cast `labels` to float;
+    `gather` requires integer indices, so we defensively coerce to long here.
+    """
     logits = logits.float()
+    if labels.dtype not in (torch.int64, torch.int32, torch.int16, torch.int8, torch.uint8):
+        labels = labels.long()
     log_probs = F.log_softmax(logits, dim=-1)
     log_probs_labels = log_probs.gather(dim=-1, index=labels.unsqueeze(-1))
     return log_probs_labels.squeeze(-1)
@@ -449,6 +457,15 @@ def expand_to_token_level(data: "DataProto"):
 
     token_level_rewards[torch.arange(batch_size), eos_mask_idx] = response_level_rewards
 
+    try:
+        logger.info(
+            f"expand_to_token_level: batch={batch_size}, response_level_mean={response_level_rewards.mean().item():.6f}, "
+            f"min={response_level_rewards.min().item():.6f}, max={response_level_rewards.max().item():.6f}, eos_idx_sample={eos_mask_idx[:4].tolist()}"
+        )
+    except Exception:
+        # defensive: avoid logging failures
+        pass
+
     # select the response part
     token_level_rewards = token_level_rewards[:, 1:]
 
@@ -535,6 +552,14 @@ def compute_token_reward(data: "DataProto", pipeline_config: RLVRConfig, kl_ctrl
             token_level_rewards, min=-pipeline_config.reward_clip, max=pipeline_config.reward_clip
         )
 
+    try:
+        logger.info(
+            f"compute_token_reward: token_reward_mean={token_level_rewards.mean().item():.6f}, "
+            f"min={token_level_rewards.min().item():.6f}, max={token_level_rewards.max().item():.6f}, current_kl={current_kl:.6f}, beta={beta:.6f}"
+        )
+    except Exception:
+        pass
+
     data.batch["token_level_rewards"] = token_level_rewards
     return data, metrics
 
@@ -543,9 +568,17 @@ def compute_token_reward(data: "DataProto", pipeline_config: RLVRConfig, kl_ctrl
 def reward_postprocess(data: "DataProto", pipeline_config: RLVRConfig, running_ctrl):
     response_level_rewards = data.batch["response_level_rewards"].clone().detach()
     response_level_metrics = {"critic/reward_clip_frac": 0.0}
-    # 对reward进行处理: 可以灵活定义不同的normalization方法
-    if pipeline_config.adv_estimator == "grpo":
-        pipeline_config.norm_mean_type, pipeline_config.norm_std_type = "group", "group"
+    # # 对reward进行处理: 可以灵活定义不同的normalization方法
+    # if pipeline_config.adv_estimator == "grpo":
+    #     pipeline_config.norm_mean_type, pipeline_config.norm_std_type = "group", "group"
+
+    # 先暂时关闭 GRPO 的 group 归一化，直接用原始 reward 训练
+    # if pipeline_config.adv_estimator == "grpo":
+    #     pipeline_config.norm_mean_type, pipeline_config.norm_std_type = "group", "group"
+
+    # 暂时设置为：不归一化
+    pipeline_config.norm_mean_type, pipeline_config.norm_std_type = None, None
+
 
     response_level_rewards = reward_norm(
                     response_level_rewards, 
@@ -565,6 +598,15 @@ def reward_postprocess(data: "DataProto", pipeline_config: RLVRConfig, running_c
         )
 
         response_level_metrics = {"critic/reward_clip_frac": reward_clip_frac}
+
+    try:
+        logger.info(
+            f"reward_postprocess: resp_level_mean={response_level_rewards.mean().item():.6f}, "
+            f"min={response_level_rewards.min().item():.6f}, max={response_level_rewards.max().item():.6f}, "
+            f"clip_frac={response_level_metrics.get('critic/reward_clip_frac', 0.0):.6f}"
+        )
+    except Exception:
+        pass
 
     data.batch["response_level_rewards"] = response_level_rewards
     return data, response_level_metrics
@@ -714,6 +756,16 @@ def compute_advantage(
 
     data.batch["advantages"] = advantages
     data.batch["returns"] = returns
+    try:
+        # log short summary for debugging
+        resp_mask_sum = int(response_mask.sum().item())
+        logger.info(
+            f"compute_advantage: token_reward_mean={token_level_rewards.mean().item():.6f}, "
+            f"advantages_mean={advantages.mean().item():.6f}, returns_mean={returns.mean().item():.6f}, "
+            f"resp_mask_sum={resp_mask_sum}, adv_sum={advantages.sum().item():.6f}"
+        )
+    except Exception:
+        pass
     return data
 
 

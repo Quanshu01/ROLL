@@ -1,0 +1,282 @@
+{
+  "initial_snapshot": {
+    ".profile": {
+      "size": 161,
+      "mtime": 1713791067.0,
+      "sha256": "bbee58b1e0787bb851e7f7a4d0c187a8122d68eb67e5fa464696310398ac005b"
+    },
+    ".lesshst": {
+      "size": 20,
+      "mtime": 1764476879.9212213,
+      "sha256": "be19ca9dca233aea9918a115d8ff364d5ac0b07aae5b0d5424bdc42201953961"
+    },
+    ".bash_history": {
+      "size": 36,
+      "mtime": 1717576312.9796708,
+      "sha256": "54e67811ea3b7b8a0f952f2c98a581cf709d0c14a3e3e6ee11f831bd8e87ae38"
+    },
+    ".Xauthority": {
+      "size": 104,
+      "mtime": 1717574837.1993,
+      "sha256": "bf330b0eddd7b6137bed4dd38dc2b39f80758cc39b9774e31c3af2c1e1afed56"
+    },
+    ".condarc": {
+      "size": 678,
+      "mtime": 1717575726.1973062,
+      "sha256": "5f589b302111d7500dd57926dc418ec9d2bebf3f2251d9c84c5e8e04e2ce0b81"
+    },
+    ".bashrc": {
+      "size": 3559,
+      "mtime": 1714487432.3037066,
+      "sha256": "7d621ba30084475eaf409efba34fb3e57b2af5650f72bb5db36b26ceff2b3e50"
+    },
+    ".python_history": {
+      "size": 92,
+      "mtime": 1717576272.8053331,
+      "sha256": "8e2bc232269dfef0e209eff5e11628d30d9a8c32367003806e37c45972a5f542"
+    },
+    ".viminfo": {
+      "size": 10578,
+      "mtime": 1764474905.7675943,
+      "sha256": "3f2236430b7c854e2e8a8bbfaf4c625ade1c79786e8a9327f85296d6e3eb1af6"
+    },
+    ".ssh/authorized_keys": {
+      "size": 0,
+      "mtime": 1714417279.802,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "snap/firmware-updater/127/.last_revision": {
+      "size": 31,
+      "mtime": 1714428052.7311423,
+      "sha256": "3ee26966ce1967a28101440520569242689f8d49cef749d5940932ddf8d8679a"
+    },
+    "snap/firmware-updater/127/.config/user-dirs.dirs": {
+      "size": 625,
+      "mtime": 1714428052.5471478,
+      "sha256": "761c288909971cb3a22d5856406d41c481240f8ba0d6bd7789d9d4ec17db4b37"
+    },
+    "snap/firmware-updater/127/.config/user-dirs.locale": {
+      "size": 5,
+      "mtime": 1714428052.5471478,
+      "sha256": "995a5eef8789e6f788ad65f99bddb8b532892eec7b4ffda5cc8952429c2eaf98"
+    },
+    "snap/firmware-updater/127/.config/fontconfig/fonts.conf": {
+      "size": 397,
+      "mtime": 1714428052.612146,
+      "sha256": "57514d86aac9f711115fc5c2008ff2578d039369f503fc3c69c31839b3cebe8f"
+    },
+    "snap/firmware-updater/common/.cache/gdk-pixbuf-loaders.cache": {
+      "size": 3774,
+      "mtime": 1763481635.558105,
+      "sha256": "bc1203afaf4799ec7220d07577690609819e7d2c38b414d9bf294e41f39480f5"
+    },
+    "snap/firmware-updater/common/.cache/gio-modules/giomodule.cache": {
+      "size": 196,
+      "mtime": 1763481635.476106,
+      "sha256": "0832e2c192a18cbb74251501ae09cd953885ffc6e264da4560ff4c3b0bf71499"
+    },
+    "snap/firmware-updater/common/.cache/immodules/immodules.cache": {
+      "size": 4884,
+      "mtime": 1763481635.544105,
+      "sha256": "bdf8533113a98468c6269fcf8cf91ba2cc424da42cad975c7fe84579cc997807"
+    },
+    "snap/firmware-updater/210/.last_revision": {
+      "size": 31,
+      "mtime": 1763481635.5021057,
+      "sha256": "2691b4bf6101ac98105c6e62beb17ee3cb68eea3638cc15ece4cd7e2ccc79a7a"
+    },
+    "snap/firmware-updater/210/.config/user-dirs.dirs": {
+      "size": 625,
+      "mtime": 1714428052.5471478,
+      "sha256": "761c288909971cb3a22d5856406d41c481240f8ba0d6bd7789d9d4ec17db4b37"
+    },
+    "snap/firmware-updater/210/.config/user-dirs.locale": {
+      "size": 5,
+      "mtime": 1714428052.5471478,
+      "sha256": "995a5eef8789e6f788ad65f99bddb8b532892eec7b4ffda5cc8952429c2eaf98"
+    },
+    "snap/firmware-updater/210/.config/fontconfig/fonts.conf": {
+      "size": 397,
+      "mtime": 1763481635.3581076,
+      "sha256": "fad63a1862ed586f659618fccdc56f3bced89d9740d38b77946ef7960b6c8e02"
+    },
+    "snap/snapd-desktop-integration/157/.last_revision": {
+      "size": 31,
+      "mtime": 1714419756.773207,
+      "sha256": "0e80f55fac224f6aa21f37320ea93647bef1dc21596d14a7181f77b09e72f603"
+    },
+    "snap/snapd-desktop-integration/157/.config/user-dirs.dirs": {
+      "size": 625,
+      "mtime": 1714419756.508207,
+      "sha256": "761c288909971cb3a22d5856406d41c481240f8ba0d6bd7789d9d4ec17db4b37"
+    },
+    "snap/snapd-desktop-integration/157/.config/user-dirs.locale": {
+      "size": 5,
+      "mtime": 1714419756.508207,
+      "sha256": "995a5eef8789e6f788ad65f99bddb8b532892eec7b4ffda5cc8952429c2eaf98"
+    },
+    "snap/snapd-desktop-integration/157/.config/fontconfig/fonts.conf": {
+      "size": 415,
+      "mtime": 1714419756.589207,
+      "sha256": "b37405a799d6de2c417a28dac1c79cecb5cf38093ed3e84d6b43e718316d621e"
+    },
+    "snap/snapd-desktop-integration/common/.cache/desktop-runtime-date": {
+      "size": 0,
+      "mtime": 1751356478.0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "snap/snapd-desktop-integration/common/.cache/gdk-pixbuf-loaders.cache": {
+      "size": 3900,
+      "mtime": 1763540522.161704,
+      "sha256": "2ad6399f264080d8d9b167df0e63e979b037f3bd1c5435481a902301e99e9123"
+    },
+    "snap/snapd-desktop-integration/common/.cache/fontconfig/CACHEDIR.TAG": {
+      "size": 200,
+      "mtime": 1714419757.733207,
+      "sha256": "05e7633fb31bf1f6f8d89020c16b9f24587fdf7638e951c9745b192f5fc3b682"
+    },
+    "snap/snapd-desktop-integration/common/.cache/fontconfig/cce1984a119241264cc05e9cd7130571-le64.cache-7": {
+      "size": 240,
+      "mtime": 1714419757.734207,
+      "sha256": "116a97dbf7d98b52e5468123a194f8ecea1a92021734aa34110bbb617be5b846"
+    },
+    "snap/snapd-desktop-integration/common/.cache/fontconfig/929fbd08cab95f9a3697b8e927dcec4c-le64.cache-7": {
+      "size": 352,
+      "mtime": 1714419757.742207,
+      "sha256": "72f21b75ba6eaf63bf90983d5c5a9e919a8cfb8240405e420b2a9451d49d57d8"
+    },
+    "snap/snapd-desktop-integration/common/.cache/fontconfig/9d6d4438cdf4715dabf11c16183c2e13-le64.cache-7": {
+      "size": 15904,
+      "mtime": 1714419757.805207,
+      "sha256": "bf0e91c1ab7bf6064b709a3126b3a67fe7c25c196c4c137441695aa4a8efa4ff"
+    },
+    "snap/snapd-desktop-integration/common/.cache/fontconfig/8a9fee22ca4f36d681b293686644350a-le64.cache-7": {
+      "size": 2864,
+      "mtime": 1714419757.814207,
+      "sha256": "28fd2a32b0954863c0757adcec7c5907c919fd1d4f4c86fd966cee7cdda47329"
+    },
+    "snap/snapd-desktop-integration/common/.cache/fontconfig/573ec803664ed168555e0e8b6d0f0c7f-le64.cache-7": {
+      "size": 200,
+      "mtime": 1714447223.3703227,
+      "sha256": "78facda05b2eb9268e93ab242ce3a37c80550581a9b676cd3bcfe59d643b49b9"
+    },
+    "snap/snapd-desktop-integration/common/.cache/fontconfig/7ef2298fde41cc6eeb7af42e48b7d293-le64.cache-7": {
+      "size": 536,
+      "mtime": 1714447223.372323,
+      "sha256": "6fb77b69ccc9fe85235d25439c0951f5d7b7e226620acf19be08542daf99bf98"
+    },
+    "snap/snapd-desktop-integration/common/.cache/fontconfig/30829fa25452a46451e813d634d7f916-le64.cache-7": {
+      "size": 3840,
+      "mtime": 1714447223.3753233,
+      "sha256": "4149aa1316e220332f807a2a575289a759f49e7307b4f50a1e5a530d00f87766"
+    },
+    "snap/snapd-desktop-integration/common/.cache/fontconfig/0bd3dc0958fa2205aaaa8ebb13e2872b-le64.cache-7": {
+      "size": 477720,
+      "mtime": 1714447223.4633334,
+      "sha256": "9e5c9de91a6a5996bedb019c58c336f828286c24c153433b0e91d9d0aa8bcb62"
+    },
+    "snap/snapd-desktop-integration/common/.cache/fontconfig/c3bb64600bf7a4aa73b55dc8bb82b27b-le64.cache-7": {
+      "size": 6384,
+      "mtime": 1714447223.4653335,
+      "sha256": "216ae8f07f5ef91ab592c0827221f71742c50aa4c75d9543015ebc2f0df0324a"
+    },
+    "snap/snapd-desktop-integration/common/.cache/fontconfig/5a9cd667735f285626dfb5b924a094f7-le64.cache-7": {
+      "size": 240,
+      "mtime": 1763540522.2847142,
+      "sha256": "240f3659db62cf5d31a4003726ac1950cc36b4255b67e5cdb9d712841d2db444"
+    },
+    "snap/snapd-desktop-integration/common/.cache/fontconfig/bd48fe18a4adea9c74a3829a6a27d1dc-le64.cache-7": {
+      "size": 352,
+      "mtime": 1763540522.2887146,
+      "sha256": "e68478ba73c48d95954dd9d1d9c04e5e9b726ef803201abb7d7864c046115457"
+    },
+    "snap/snapd-desktop-integration/common/.cache/fontconfig/e584ad45b7e40b0abb52db39d499d1f1-le64.cache-7": {
+      "size": 15904,
+      "mtime": 1763540522.3117166,
+      "sha256": "18c5c53ef867894c332160f5160a845cea94a988c8cda842dbc6fe7119be340e"
+    },
+    "snap/snapd-desktop-integration/common/.cache/fontconfig/6bb99dfe787fd7e4a1bc01fa4f6214df-le64.cache-7": {
+      "size": 2864,
+      "mtime": 1763540522.318717,
+      "sha256": "5bbbf1f96c87da287cdd6a0e19b35eb0ee70251a491715e27866950d0ebcac8d"
+    },
+    "snap/snapd-desktop-integration/common/.cache/gio-modules/giomodule.cache": {
+      "size": 196,
+      "mtime": 1763540521.9546869,
+      "sha256": "0832e2c192a18cbb74251501ae09cd953885ffc6e264da4560ff4c3b0bf71499"
+    },
+    "snap/snapd-desktop-integration/common/.cache/immodules/immodules.cache": {
+      "size": 5217,
+      "mtime": 1763540522.1667044,
+      "sha256": "71abd08a008fc7e3a11ee20e8527374fb82c97daa82c6d42072ce26401844cac"
+    },
+    "snap/snapd-desktop-integration/315/.last_revision": {
+      "size": 31,
+      "mtime": 1763540521.9516866,
+      "sha256": "cfc247e8a40371cd5b90b7f5363de7b46259d4ad9e0c96c579cf481da084d1d0"
+    },
+    "snap/snapd-desktop-integration/315/.config/user-dirs.dirs": {
+      "size": 625,
+      "mtime": 1714419756.508207,
+      "sha256": "761c288909971cb3a22d5856406d41c481240f8ba0d6bd7789d9d4ec17db4b37"
+    },
+    "snap/snapd-desktop-integration/315/.config/user-dirs.locale": {
+      "size": 5,
+      "mtime": 1714419756.508207,
+      "sha256": "995a5eef8789e6f788ad65f99bddb8b532892eec7b4ffda5cc8952429c2eaf98"
+    },
+    "snap/snapd-desktop-integration/315/.config/fontconfig/fonts.conf": {
+      "size": 415,
+      "mtime": 1763540521.7736714,
+      "sha256": "f9550ba84856dd64558965d2b60e33d0b1d2e732816e5e6a8a96c2f921515ba7"
+    },
+    ".config/pip/pip.conf": {
+      "size": 63,
+      "mtime": 1717575717.9495757,
+      "sha256": "213102b86c5b59de80c8ce810b37affdd4eb5b9aec1831728e160231938fb03b"
+    },
+    ".dbus/session-bus/5ea8971abe9d4179973d955d0a21067a-11": {
+      "size": 466,
+      "mtime": 1714420668.7989311,
+      "sha256": "a004b8379b0a08d24438287efa98623a79451bafb9173ec937fdc1bb79e1fbd7"
+    },
+    ".local/share/recently-used.xbel": {
+      "size": 218,
+      "mtime": 1714420739.8560796,
+      "sha256": "28d0401d1b8b5b1b2dd6987025196c8ebcd287a31f6759bd26cb8eb1ca27fc99"
+    }
+  },
+  "last_snapshot": {},
+  "finalized_files": [],
+  "snapshotted_steps": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "_debug_info": {
+    "inferred_from_manifest": null,
+    "resolve_script_output": "None",
+    "path_info": {
+      "target": "/root",
+      "target_exists": true,
+      "actual_home": "/root",
+      "home_exists": true,
+      "actual_file_dir": null,
+      "final_dir": "/root",
+      "correction_reason": null
+    },
+    "target_root": "/home/vipuser",
+    "target_root_source": "from_home_dir",
+    "snapshot_diagnostics": {
+      "root_path": "/home/vipuser",
+      "error": "vm_client.run_command returned empty output",
+      "output_received": false
+    },
+    "snapshot_file_count": 0,
+    "snapshot_is_empty": true,
+    "get_vm_home_dir_result": "/home/vipuser",
+    "snapshot_error": "vm_client.run_command returned empty output"
+  }
+}

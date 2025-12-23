@@ -1,0 +1,19 @@
+{
+  "initial_snapshot": {
+    "%PUBLIC%\\Documents": {}
+  },
+  "last_snapshot": {
+    "%PUBLIC%\\Documents": {}
+  },
+  "finalized_files": [],
+  "monitor_roots": [
+    "%PUBLIC%\\Documents"
+  ],
+  "snapshotted_steps": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ]
+}

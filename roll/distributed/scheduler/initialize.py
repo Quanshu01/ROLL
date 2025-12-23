@@ -36,6 +36,27 @@ def start_ray_cluster():
         logger.info("Ray cluster already initialized")
         return False
 
+    # Fix: 处理 /tmp/ray/ray_current_cluster 权限问题
+    # 如果文件存在但当前用户无法写入，尝试删除或修复权限
+    ray_current_cluster_file = "/tmp/ray/ray_current_cluster"
+    if os.path.exists(ray_current_cluster_file):
+        try:
+            # 尝试删除文件（如果无法写入，说明是权限问题）
+            if not os.access(ray_current_cluster_file, os.W_OK):
+                logger.warning(f"Found existing {ray_current_cluster_file} with permission issues, attempting to remove it")
+                try:
+                    os.remove(ray_current_cluster_file)
+                    logger.info(f"Successfully removed {ray_current_cluster_file}")
+                except PermissionError:
+                    logger.warning(f"Cannot remove {ray_current_cluster_file} due to permission error, will try to use RAY_TMPDIR")
+                    # 使用用户可写的临时目录
+                    user_tmpdir = os.path.join(os.path.expanduser("~"), ".ray_tmp")
+                    os.makedirs(user_tmpdir, exist_ok=True)
+                    os.environ["RAY_TMPDIR"] = user_tmpdir
+                    logger.info(f"Set RAY_TMPDIR to {user_tmpdir}")
+        except Exception as e:
+            logger.warning(f"Error handling {ray_current_cluster_file}: {e}")
+
     if rank == 0:
         cmd = f"ray start --head --port={master_port} --node-name={node_name} --dashboard-port={dashboard_port}"
     else:

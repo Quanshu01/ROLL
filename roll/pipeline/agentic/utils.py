@@ -156,6 +156,21 @@ def compute_response_level_rewards(batch: "DataProto", pipeline_config: AgenticC
         scores_to_group = DataProto.from_dict({"scores": episode_scores})
         scores_to_group.non_tensor_batch = batch.non_tensor_batch
         episode_rewards: torch.Tensor = grouped_reward_norm(scores_to_group, reward_normalization=pipeline_config.reward_normalization)
+        # fallback: if normalization produced all zeros (e.g. single-sample group), keep raw episode scores
+        try:
+            if torch.max(torch.abs(episode_rewards)) < 1e-6:
+                logger.warning(f"grouped_reward_norm produced near-zero episode_rewards, falling back to raw scores. episode_rewards_sample={episode_rewards.flatten()[:8].tolist()}")
+                # dump a small debug file for offline inspection
+                try:
+                    os.makedirs("output/debug", exist_ok=True)
+                    dump_path = os.path.join("output/debug", f"fallback_episode_rewards_{int(time.time())}.pt")
+                    torch.save({"grouped": episode_rewards, "raw": scores_to_group.batch["scores"]}, dump_path)
+                    logger.info(f"wrote fallback debug to {dump_path}")
+                except Exception:
+                    logger.exception("failed to write fallback debug file")
+                episode_rewards = scores_to_group.batch["scores"].clone().detach()
+        except Exception:
+            logger.exception("error checking episode_rewards fallback condition")
 
         # step 2
         batch = build_state_group(batch=batch)
@@ -166,6 +181,19 @@ def compute_response_level_rewards(batch: "DataProto", pipeline_config: AgenticC
         step_rewards: torch.Tensor = grouped_reward_norm(batch=scores_to_group,
                                                          reward_normalization=RewardNormalizationConfig(grouping="state_group_id",
                                                                                                         method=pipeline_config.reward_normalization.method))
+        try:
+            if torch.max(torch.abs(step_rewards)) < 1e-6:
+                logger.warning(f"grouped_reward_norm produced near-zero step_rewards, falling back to raw scores. step_rewards_sample={step_rewards.flatten()[:8].tolist()}")
+                try:
+                    os.makedirs("output/debug", exist_ok=True)
+                    dump_path = os.path.join("output/debug", f"fallback_step_rewards_{int(time.time())}.pt")
+                    torch.save({"grouped": step_rewards, "raw": scores_to_group.batch["scores"]}, dump_path)
+                    logger.info(f"wrote fallback debug to {dump_path}")
+                except Exception:
+                    logger.exception("failed to write fallback debug file")
+                step_rewards = scores_to_group.batch["scores"].clone().detach()
+        except Exception:
+            logger.exception("error checking step_rewards fallback condition")
 
         batch.batch["response_level_rewards"] = pipeline_config.episode_reward_weight * episode_rewards + pipeline_config.step_reward_weight * step_rewards
         batch.batch["episode_rewards_norm"] = episode_rewards
@@ -173,16 +201,55 @@ def compute_response_level_rewards(batch: "DataProto", pipeline_config: AgenticC
     elif pipeline_config.adv_estimator == "step_reinforce":
         scores_to_group = DataProto.from_dict({"scores": batch.batch["step_rewards"]})
         scores_to_group.non_tensor_batch = batch.non_tensor_batch
-        batch.batch["response_level_rewards"] = grouped_reward_norm(scores_to_group, reward_normalization=pipeline_config.reward_normalization)
+        # compute grouped normalized rewards; fallback to raw scores if normalization zeroes them
+        grouped = grouped_reward_norm(scores_to_group, reward_normalization=pipeline_config.reward_normalization)
+        try:
+            if torch.max(torch.abs(grouped)) < 1e-6:
+                logger.warning(f"grouped_reward_norm produced near-zero grouped rewards, falling back to raw scores. grouped_sample={grouped.flatten()[:8].tolist()}")
+                try:
+                    os.makedirs("output/debug", exist_ok=True)
+                    dump_path = os.path.join("output/debug", f"fallback_grouped_rewards_{int(time.time())}.pt")
+                    torch.save({"grouped": grouped, "raw": scores_to_group.batch["scores"]}, dump_path)
+                    logger.info(f"wrote fallback debug to {dump_path}")
+                except Exception:
+                    logger.exception("failed to write fallback debug file")
+                grouped = scores_to_group.batch["scores"].clone().detach()
+        except Exception:
+            logger.exception("error checking grouped fallback condition")
+        batch.batch["response_level_rewards"] = grouped
     else:
-        scores_to_group = DataProto.from_dict({"scores": batch.batch["scores"].clone().sum(dim=-1)})
+        # 优先使用环境已写入的 response_level_rewards（已包含 episode_score-episode_cost）
+        if "response_level_rewards" in batch.batch:
+            base_rewards = batch.batch["response_level_rewards"].clone().detach()
+        else:
+            base_rewards = batch.batch["scores"].clone().sum(dim=-1)
+
+        scores_to_group = DataProto.from_dict({"scores": base_rewards})
         scores_to_group.non_tensor_batch = batch.non_tensor_batch
-        batch.batch["response_level_rewards"] = grouped_reward_norm(scores_to_group, reward_normalization=pipeline_config.reward_normalization)
+        grouped = grouped_reward_norm(scores_to_group, reward_normalization=pipeline_config.reward_normalization)
+
+        # 当归一化导致奖励几乎全为 0 时，回退到原始奖励，避免梯度为 0
+        try:
+            if torch.max(torch.abs(grouped)) < 1e-6:
+                logger.warning(
+                    f"grouped_reward_norm produced near-zero grouped rewards, falling back to raw scores. "
+                    f"grouped_sample={grouped.flatten()[:8].tolist()}"
+                )
+                grouped = base_rewards.clone().detach()
+        except Exception:
+            logger.exception("error checking grouped fallback condition")
+
+        batch.batch["response_level_rewards"] = grouped
 
     return batch
 
 
 print_only_once = False
+
+# Map base rollout paths to a timestamped subdirectory created for this run.
+# Ensures we create one timestamped folder per base `path` and reuse it for
+# subsequent dump calls so files from different runs don't overwrite each other.
+_rollout_path_map = {}
 
 
 def dump_frames_as_gif(filename, frames, duration=0.2):
@@ -224,15 +291,34 @@ def dump_rollout_trajectories(path, global_step, data: DataProto):
     if columns_config is None:
         return
 
+    # Operate on a deep copy to avoid mutating the original DataProto
     write_data = copy.deepcopy(data.non_tensor_batch)
-    [data.non_tensor_batch.pop(item[0]) for item in columns_config if item[0] in data.non_tensor_batch]
+    # NOTE: previous implementation removed keys from `data.non_tensor_batch` here,
+    # which caused downstream code that expects fields like 'traj_id' to fail.
+    # We must not mutate the original `data` in-place; only remove from the copy
+    # if needed by the writer implementation. Keep original intact.
 
     data_cnt = len(data)
     write_data['global_step'] = [global_step] * data_cnt
     columns_config.append(['global_step','bigint'])
 
-    for checker, func in DUMPING_FUNC:
-        if checker(path):
-            p = multiprocessing.Process(target=func, args=(path, write_data, columns_config), daemon=False)
-            p.start()
+    # Ensure we don't overwrite a previous run's rollouts: create (once per
+    # base `path`) a timestamped subdirectory and use it for all writes in
+    # this process. This keeps the external API (accepting `path`) unchanged
+    # while avoiding clobbering files across runs.
+    try:
+        base_path = path
+        if base_path not in _rollout_path_map:
+            ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+            target = os.path.join(base_path, ts)
+            os.makedirs(target, exist_ok=True)
+            _rollout_path_map[base_path] = target
+        target_path = _rollout_path_map[base_path]
+
+        for checker, func in DUMPING_FUNC:
+            if checker(target_path):
+                p = multiprocessing.Process(target=func, args=(target_path, write_data, columns_config), daemon=False)
+                p.start()
+    except Exception as e:
+        logger.error(f"failed to schedule dump_rollout_trajectories: {e}")
 

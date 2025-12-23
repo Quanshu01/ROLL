@@ -1,0 +1,8 @@
+[
+  {
+    "id": "windows-pytest-report-txt",
+    "type": "txt",
+    "generated": "%PUBLIC%/Documents/report.txt",
+    "reference": "%PUBLIC%/Documents/report_reference.txt"
+  }
+]

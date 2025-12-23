@@ -1,0 +1,15 @@
+{
+  "initial_snapshot": {},
+  "last_snapshot": {},
+  "finalized_files": [],
+  "snapshotted_steps": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "_debug_info": {
+    "skip_reason": "No file_compare_manifest.json found, file snapshot not needed"
+  }
+}

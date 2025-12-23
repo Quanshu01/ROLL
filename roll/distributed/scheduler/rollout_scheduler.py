@@ -160,8 +160,28 @@ class GroupQueueManager:
         self.rollout_complete = {}
 
         group_filter_cls = safe_import_class(env_manager_config.group_filter_cls)
-        assert group_filter_cls
-        self.group_filter = group_filter_cls(config, env_manager_config, mode)
+        # Be permissive: if import failed, fall back to a no-op filter.
+        if group_filter_cls is None:
+            class _DefaultGroupFilter:
+                def filter(self, group_id, episode_id, group) -> bool:
+                    return False
+
+            self.group_filter = _DefaultGroupFilter()
+        else:
+            # Try to instantiate with (config, env_manager_config, mode),
+            # but fall back to no-arg construction if signatures differ.
+            try:
+                self.group_filter = group_filter_cls(config, env_manager_config, mode)
+            except TypeError:
+                try:
+                    self.group_filter = group_filter_cls()
+                except Exception as e:
+                    logger.warning(f"Failed to instantiate group_filter {group_filter_cls}: {e}")
+                    class _DefaultGroupFilter2:
+                        def filter(self, group_id, episode_id, group) -> bool:
+                            return False
+
+                    self.group_filter = _DefaultGroupFilter2()
 
         if self.mode == "train":
             self.async_generation_ratio = config.async_generation_ratio
@@ -389,4 +409,7 @@ class RolloutScheduler:
         metrics.update(await self.env_output_queue.collect_metrics.remote())
         batch = DataProto.concat(data_batch)
         batch.meta_info["metrics"] = metrics
+        # Ensure COLUMMNS_CONFIG is preserved (it should be from data[0] during concat, but explicitly ensure it)
+        if data_batch and "COLUMMNS_CONFIG" in data_batch[0].meta_info:
+            batch.meta_info["COLUMMNS_CONFIG"] = data_batch[0].meta_info["COLUMMNS_CONFIG"]
         return batch

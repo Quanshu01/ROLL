@@ -1,0 +1,1 @@
+{"env_ids": [0], "episode_scores": [0], "save_content": ["{\"history\": [], \"episode_score\": 0.0, \"episode_cost\": 0.0, \"env_metric\": {\"env/OSWorld/num_actions\": 0, \"env/OSWorld/episode_return\": 0, \"env/response_length\": 0.0}, \"env_id\": 0, \"group_id\": 0, \"tag\": \"OSWorld\", \"mode\": \"train\"}"], "traj_id": ["OSWorld_0_1_1645085137_0"], "global_step": [1]}

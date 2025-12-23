@@ -1,0 +1,8 @@
+[
+  {
+    "id": "linux-pytest-demo-txt",
+    "type": "txt",
+    "generated": "~/pytest_demo.txt",
+    "reference": "~/pytest_demo_reference.txt"
+  }
+]

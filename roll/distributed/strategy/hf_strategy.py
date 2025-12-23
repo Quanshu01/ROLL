@@ -78,10 +78,61 @@ class HfInferStrategy(InferenceStrategy):
                     assert key not in forward_args
                     # DataProto.to('cuda') in upper frame not work for non_tensor_batch
                     forward_args[key] = torch.concat(multi_modal_data[key], dim=0).to(input_ids.device)
+            # Validate visual/video inputs: ensure placeholder token counts match feature counts
+            # Note: In Qwen2.5-VL, pixel_values_videos may contain image features (not just video),
+            # so we need to check both image_token_id and video_token_id
+            if "pixel_values_videos" in forward_args:
+                try:
+                    logger.debug(f"forward_args['pixel_values_videos'] type={type(forward_args['pixel_values_videos'])}")
+                    pv_sample = forward_args['pixel_values_videos']
+                    if hasattr(pv_sample, 'shape'):
+                        logger.debug(f"pixel_values_videos.shape={getattr(pv_sample, 'shape')}, dtype={getattr(pv_sample, 'dtype', None)}")
+                    elif isinstance(pv_sample, (list, tuple)):
+                        logger.debug(f"pixel_values_videos is list-like len={len(pv_sample)}; first_elem_type={type(pv_sample[0])}")
+                except Exception:
+                    logger.exception("Failed to introspect pixel_values_videos for debug")
+                image_token_id = getattr(self.model.config, "image_token_id", None)
+                video_token_id = getattr(self.model.config, "video_token_id", None)
+                if video_token_id is None:
+                    video_token_id = getattr(self.model.config, "video_pad_token_id", None)
+                if image_token_id is None:
+                    image_token_id = getattr(self.model.config, "image_pad_token_id", None)
+                
+                if input_ids is not None:
+                    # Count both image and video tokens
+                    image_tokens = (input_ids == image_token_id).sum(dim=1) if image_token_id is not None else torch.zeros(input_ids.shape[0], device=input_ids.device)
+                    video_tokens = (input_ids == video_token_id).sum(dim=1) if video_token_id is not None else torch.zeros(input_ids.shape[0], device=input_ids.device)
+                    total_visual_tokens = int((image_tokens + video_tokens).sum().item())
+                    
+                    # total visual features provided (could be images or videos)
+                    try:
+                        total_visual_features = int(forward_args["pixel_values_videos"].shape[0])
+                    except Exception:
+                        total_visual_features = None
+
+                    # Handle mismatch: drop video inputs if tokens and features don't match
+                    if total_visual_features is None or total_visual_tokens != total_visual_features:
+                        logger.error(
+                            f"Visual token/feature mismatch detected; dropping pixel_values_videos. "
+                            f"image_tokens={int(image_tokens.sum().item())}, video_tokens={int(video_tokens.sum().item())}, "
+                            f"total_tokens={total_visual_tokens}, total_features={total_visual_features}"
+                        )
+                        # Remove video inputs to avoid transformer ValueError deep inside model
+                        forward_args.pop("pixel_values_videos", None)
+                        forward_args.pop("video_grid_thw", None)
+                    # Also handle case where there are no visual tokens but features exist
+                    elif total_visual_tokens == 0 and total_visual_features > 0:
+                        logger.warning(
+                            f"No image/video tokens found but {total_visual_features} visual features present in pixel_values_videos; "
+                            f"dropping to avoid mismatch. This may indicate images were incorrectly placed in pixel_values_videos."
+                        )
+                        forward_args.pop("pixel_values_videos", None)
+                        forward_args.pop("video_grid_thw", None)
             # in Qwen2-vl/Qwen2.5-vl, use_cache=False should be set manually to
             # to avoid error in _update_causal_mask, otherwise past_key_values
             # is not None (would init as DynamicCache when use_cache) and requires
             # left-padding when using fa2
+            input_ids = input_ids.long()  # 确保是整数索引
             output = self.model(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
@@ -121,6 +172,45 @@ class HfInferStrategy(InferenceStrategy):
                     assert key not in forward_args
                     # DataProto.to('cuda') in upper frame not work for non_tensor_batch
                     forward_args[key] = torch.concat(multi_modal_data[key], dim=0).to(input_ids.device)
+            # Validate visual/video inputs for generation path as well
+            # Note: In Qwen2.5-VL, pixel_values_videos may contain image features (not just video),
+            # so we need to check both image_token_id and video_token_id
+            if "pixel_values_videos" in forward_args:
+                image_token_id = getattr(self.model.config, "image_token_id", None)
+                video_token_id = getattr(self.model.config, "video_token_id", None)
+                if video_token_id is None:
+                    video_token_id = getattr(self.model.config, "video_pad_token_id", None)
+                if image_token_id is None:
+                    image_token_id = getattr(self.model.config, "image_pad_token_id", None)
+                
+                if input_ids is not None:
+                    # Count both image and video tokens
+                    image_tokens = (input_ids == image_token_id).sum(dim=1) if image_token_id is not None else torch.zeros(input_ids.shape[0], device=input_ids.device)
+                    video_tokens = (input_ids == video_token_id).sum(dim=1) if video_token_id is not None else torch.zeros(input_ids.shape[0], device=input_ids.device)
+                    total_visual_tokens = int((image_tokens + video_tokens).sum().item())
+                    
+                    try:
+                        total_visual_features = int(forward_args["pixel_values_videos"].shape[0])
+                    except Exception:
+                        total_visual_features = None
+
+                    # Handle mismatch: drop video inputs if tokens and features don't match
+                    if total_visual_features is None or total_visual_tokens != total_visual_features:
+                        logger.error(
+                            f"Visual token/feature mismatch detected in generation path; dropping pixel_values_videos. "
+                            f"image_tokens={int(image_tokens.sum().item())}, video_tokens={int(video_tokens.sum().item())}, "
+                            f"total_tokens={total_visual_tokens}, total_features={total_visual_features}"
+                        )
+                        forward_args.pop("pixel_values_videos", None)
+                        forward_args.pop("video_grid_thw", None)
+                    # Also handle case where there are no visual tokens but features exist
+                    elif total_visual_tokens == 0 and total_visual_features > 0:
+                        logger.warning(
+                            f"No image/video tokens found in generation path but {total_visual_features} visual features present in pixel_values_videos; "
+                            f"dropping to avoid mismatch. This may indicate images were incorrectly placed in pixel_values_videos."
+                        )
+                        forward_args.pop("pixel_values_videos", None)
+                        forward_args.pop("video_grid_thw", None)
             output = self.model.generate(
                 input_ids=input_ids, attention_mask=attention_mask, use_cache=True, **forward_args, **generation_config
             )

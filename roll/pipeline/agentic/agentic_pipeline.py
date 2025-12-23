@@ -251,6 +251,26 @@ class AgenticPipeline(BasePipeline):
                 # implement critic warmup
                 if self.pipeline_config.critic_warmup <= global_step:
                     # update actor
+                    # optional debug dump: write important batch tensors for offline inspection
+                    if getattr(self.pipeline_config, "debug_dump_batch", False):
+                        try:
+                            os.makedirs(os.path.join(self.pipeline_config.output_dir, "debug"), exist_ok=True)
+                            dump_path = os.path.join(self.pipeline_config.output_dir, "debug", f"batch_debug_{global_step}.pt")
+                            dump_obj = {
+                                "response_level_rewards": batch.batch.get("response_level_rewards"),
+                                "token_level_rewards": batch.batch.get("token_level_rewards"),
+                                "response_mask": batch.batch.get("response_mask"),
+                                "final_response_mask": batch.batch.get("final_response_mask"),
+                                "advantages": batch.batch.get("advantages"),
+                                "returns": batch.batch.get("returns"),
+                                "old_log_probs": batch.batch.get("old_log_probs"),
+                                "ref_log_probs": batch.batch.get("ref_log_probs"),
+                            }
+                            torch.save(dump_obj, dump_path)
+                            logger.info(f"wrote actor batch debug to {dump_path}")
+                        except Exception:
+                            logger.exception("failed to write actor batch debug file")
+
                     actor_train_metrics_refs = self.actor_train.train_step(batch, blocking=False)
                     actor_train_metrics: DataProto = DataProto.materialize_concat(data_refs=actor_train_metrics_refs)
                     metrics.update(reduce_metrics(actor_train_metrics.meta_info.pop("metrics", {})))
@@ -289,8 +309,9 @@ class AgenticPipeline(BasePipeline):
                     input_ids = group_batch.batch["input_ids"]
                     prompt_ids_list = [input_ids[i][mask.bool()] for i, mask in enumerate(prompt_mask)]
                     response_ids_list = [input_ids[i][mask.bool()] for i, mask in enumerate(non_prompt_mask)]
-                    prompts = self.tokenizer.batch_decode(prompt_ids_list, skip_special_tokens=False)
-                    responses = self.tokenizer.batch_decode(response_ids_list, skip_special_tokens=False)
+                    # Avoid logging tokenizer special tokens (e.g. <|im_start|>)
+                    prompts = self.tokenizer.batch_decode(prompt_ids_list, skip_special_tokens=True)
+                    responses = self.tokenizer.batch_decode(response_ids_list, skip_special_tokens=True)
                     episode_scores = group_batch.non_tensor_batch["episode_scores"].tolist()
                     step_scores = group_batch.non_tensor_batch["step_scores"].tolist()
                     if not isinstance(step_scores[0], float):
