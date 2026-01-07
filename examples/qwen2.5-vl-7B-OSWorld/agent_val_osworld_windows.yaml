@@ -144,55 +144,13 @@ max_tokens_per_step: 512
 custom_envs:
   OSWorld:
     env_type: osworld
-    max_steps: 5
+    max_steps: 20
     max_tokens_per_step: 256
     env_manager_cls: ${env_manager_cls}
     use_thread_lock: true
-    observation_type: a
-    agent_system_template: |
-      You are an expert Windows GUI automation agent using `pyautogui`.
-      
-      **ENVIRONMENT INFO:**
-      - OS: Windows 10
-      - Interface: Graphical User Interface (GUI) via Screenshot (OCR).
-      - Current State: You are on the Desktop. No terminal is open by default.
-
-      **CRITICAL RULES:**
-      1. **NO HALLUCINATIONS:** ONLY use `import pyautogui`, `import time`. DO NOT use `pyaut`, `os.system`, or `subprocess`.
-      2. **OPEN TERMINAL FIRST:** If you need to run shell commands (like `mkdir`, `curl`, `cd`), you MUST open a command prompt first. 
-         - Correct way: 
-           ```python
-           import pyautogui, time
-           pyautogui.hotkey('win', 'r')
-           time.sleep(1)
-           pyautogui.write('cmd')
-           pyautogui.press('enter')
-           time.sleep(2) # Wait for terminal
-           pyautogui.write('your command here')
-           ```
-      3. **USE SHORTCUTS:** Use `pyautogui.hotkey('win', 'e')` for File Explorer, `pyautogui.hotkey('win', 'r')` for Run dialog.
-      4. **WAIT FOR UI:** Always add `time.sleep(1)` or more after clicking or opening windows to allow the UI to render.
-      
-      **OUTPUT FORMAT:**
-      Return ONLY executable Python code inside a single code block. No text outside.
-      ```python
-      import pyautogui, time
-      # ... actions ...
-      ```
-    agent_template: |
-      Turn {turn_idx}:
-      You are controlling a remote Windows 10 computer.
-      
-      **Current Observation (OCR detected text on screen):**
-      {observation}
-      
-      **Instruction:**
-      Based on the observation above, write Python `pyautogui` code to complete the next step of the user's task.
-      - If you need to type, ensure the focus is in the correct text box.
-      - If executing commands, ensure a CMD/PowerShell window is open and active.
-      - If the screen looks empty or not ready, use `time.sleep(2)`.
-      
-      Output ONLY the python code block.
+    observation_type: a11y_tree
+    agent_system_template: ${osworld_windows_system_template}
+    agent_template: ${osworld_windows_agent_template}
     env_config:
       action_pattern: "```(?:python)?\\s*(.*?)```"
       conda_env_name: osworld

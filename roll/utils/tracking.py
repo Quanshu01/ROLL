@@ -63,6 +63,23 @@ class WandbTracker(BaseTracker):
         import wandb
         if api_key:
             wandb.login(key=api_key)
+        # 增加 init_timeout 设置，避免网络慢时超时（默认300秒，增加到600秒）
+        # wandb.init 的 settings 参数可以接受字典或 wandb.Settings 对象
+        # 为了兼容性，统一转换为字典格式
+        if not isinstance(settings, dict):
+            # 如果是 wandb.Settings 对象，尝试转换为字典
+            try:
+                # wandb.Settings 对象可以通过 _as_dict() 方法转换为字典
+                if hasattr(settings, "_as_dict"):
+                    settings = settings._as_dict()
+                else:
+                    # 如果没有 _as_dict 方法，创建一个新字典
+                    settings = {"console": "off"}
+            except Exception:
+                settings = {"console": "off"}
+        # 确保 init_timeout 已设置
+        if "init_timeout" not in settings:
+            settings["init_timeout"] = 600
         self.run = wandb.init(project=project, tags=tags, name=name, notes=notes, dir=log_dir, settings=settings)
 
         self.run.config.update(config, allow_val_change=True)

@@ -12,11 +12,11 @@ hydra:
     dir: .
   output_subdir: null
 
-exp_name: "agentic_pipeline_osworld"
+exp_name: "agentic_pipeline_osworld_2vm"
 seed: 42
 logging_dir: ./output/logs
 output_dir: ./output
-rollout_dump_dir: /data/share/projects/quanshu/ROLL/output/rollouts/agentic_pipeline_osworld
+rollout_dump_dir: /data/share/projects/quanshu/ROLL/output/rollouts/agentic_pipeline_osworld_2vm
 render_save_dir: ./output/render
 system_envs:
   USE_MODELSCOPE: '1'
@@ -26,12 +26,12 @@ tracker_kwargs:
  api_key: 9b8c18ab54c4fb4d75f32410d7dcfaad7a921a10
  project: roll-agentic
  name: ${exp_name}
- notes: "agentic_pipeline_osworld"
+ notes: "agentic_pipeline_osworld_2vm"
  tags:
    - agentic
    - roll
    - osworld
-
+   - 2vm
 
 checkpoint_config:
   type: file_system
@@ -56,12 +56,6 @@ init_kl_coef: 0.0
 whiten_advantages: false
 entropy_loss_coef: 0
 max_grad_norm: 1.0
-
-# pretrain: /data/share/projects/quanshu/models/mPLUG/GUI-Owl-7B
-# reward_pretrain: /data/share/projects/quanshu/models/mPLUG/GUI-Owl-7B
-
-# pretrain: /data/share/models/qwen_vl/Qwen2.5-VL-7B-Instruct
-# reward_pretrain: /data/share/models/qwen_vl/Qwen2.5-VL-7B-Instruct
 
 pretrain: /data/share/models/qwen2.5/Qwen2.5-7B-Instruct
 reward_pretrain: /data/share/models/qwen2.5/Qwen2.5-7B-Instruct
@@ -104,7 +98,7 @@ actor_infer:
   strategy_args:
     strategy_name: vllm
     strategy_config:
-      gpu_memory_utilization: 0.98
+      gpu_memory_utilization: 0.1  # 降低到 10% 以避免显存不足（可用 11.53 GiB，需要约 7.9 GiB）
       tensor_parallel_size: 2
       block_size: 16
       load_format: auto
@@ -130,29 +124,58 @@ reference:
 
 reward_normalization:
   grouping: traj_group_id
-  # method: mean_std
   method: identity
 
 train_env_manager:
   max_env_num_per_worker: 1
-  num_env_groups: 1
+  num_env_groups: 2
   group_size: 1
-  tags: [OSWorld]
-  num_groups_partition: [1]
+  tags: [OSWorld1, OSWorld2]
+  num_groups_partition: [1, 1]
 
 val_env_manager:
   max_env_num_per_worker: 1
-  num_env_groups: 1
+  num_env_groups: 2
   group_size: 1
-  tags: [OSWorld]
-  num_groups_partition: [1]
+  tags: [OSWorld1, OSWorld2]
+  num_groups_partition: [1, 1]
 
 max_tokens_per_step: 512
 
 custom_envs:
-  OSWorld:
+  OSWorld1:
     env_type: osworld
-    max_steps: 20
+    max_steps: 15
+    max_tokens_per_step: 256
+    env_manager_cls: ${env_manager_cls}
+    use_thread_lock: true
+    observation_type: a11y_tree
+    agent_system_template: ${osworld_windows_system_template}
+    agent_template: ${osworld_windows_agent_template}
+    env_config:
+      action_pattern: "```(?:python)?\\s*(.*?)```"
+      conda_env_name: osworld
+      provider_name: vnc
+      observation_type: a11y_tree
+      headless: true
+      task_config_path: evaluation_examples/test_windows_pytest.json
+      format_penalty: ${osworld_format_penalty}
+      server_log_dir: ${oc.env:HYDRA_RUN_DIR,./output/logs/osworld_windows}
+      path_to_vm: js1.blockelite.cn:26023:26076
+      instance_name: 3799886598_lyg0150_513b8f8064a74d1aae621f0e61f9b458_u0_c0
+      image_name: win10_ai_cuda11.1_uimg.86a6eb.v2512041534
+      client_password: quit3eng
+      sleep_after_execution: 3
+      step_pytest:
+        enabled: false
+        frequency: 1
+        global_harm_detection:
+          enabled: false
+          pytest_file: "desktop_env/evaluators/test_windows_pytest.py"
+        per_step: {}
+  OSWorld2:
+    env_type: osworld
+    max_steps: 15
     max_tokens_per_step: 128
     env_manager_cls: ${env_manager_cls}
     use_thread_lock: true
@@ -165,8 +188,7 @@ custom_envs:
       observation_type: terminal
       action_space: pyautogui
       headless: true
-      # task_config_path: evaluation_examples/test_genearl_harm_mini.json
-      task_config_path: evaluation_examples/test_genearl_harn.json
+      task_config_path: evaluation_examples/test_linux_pytest.json
       format_penalty: ${osworld_format_penalty}
       server_log_dir: ${oc.env:HYDRA_RUN_DIR,./output/logs/osworld_fallback}
       path_to_vm: js1.blockelite.cn:26031:26088

@@ -212,6 +212,19 @@ class AgenticPipeline(BasePipeline):
                     # We can group by tag(env_type)/traj_group_id(group)/batch(rollout_batch)... to compute rewards / advantages
                     # The compute_response_level_rewards function injects a response_level_rewards key into batch.batch.
                     batch = compute_response_level_rewards(batch=batch, pipeline_config=self.pipeline_config)
+                    
+                    # 记录 response_level_rewards 的统计信息（用于监控训练）
+                    if "response_level_rewards" in batch.batch:
+                        resp_rewards = batch.batch["response_level_rewards"]
+                        logger.info(
+                            f"[Training Step {global_step}] Response Level Rewards Stats: "
+                            f"mean={resp_rewards.mean().item():.4f}, "
+                            f"min={resp_rewards.min().item():.4f}, "
+                            f"max={resp_rewards.max().item():.4f}, "
+                            f"std={resp_rewards.std().item():.4f}, "
+                            f"shape={resp_rewards.shape}"
+                        )
+                    
                     metrics.update(reduce_metrics(batch.meta_info.pop("metrics", {})))
 
                     if self.pipeline_config.reward_clip:
@@ -271,9 +284,11 @@ class AgenticPipeline(BasePipeline):
                         except Exception:
                             logger.exception("failed to write actor batch debug file")
 
+                    logger.info(f"[Training Step {global_step}] Updating Actor Model (PPO training)...")
                     actor_train_metrics_refs = self.actor_train.train_step(batch, blocking=False)
                     actor_train_metrics: DataProto = DataProto.materialize_concat(data_refs=actor_train_metrics_refs)
                     metrics.update(reduce_metrics(actor_train_metrics.meta_info.pop("metrics", {})))
+                    logger.info(f"[Training Step {global_step}] Actor Model Updated Successfully")
 
                 if self.pipeline_config.adv_estimator == "gae":
                     critic_train_metrics = DataProto.materialize_concat(data_refs=critic_train_metrics_refs)

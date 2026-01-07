@@ -39,7 +39,7 @@ checkpoint_config:
 
 num_gpus_per_node: 5
 
-max_steps: 100
+max_steps: 125
 save_steps: 50
 logging_steps: 1
 eval_steps: 1
@@ -98,7 +98,7 @@ actor_infer:
   strategy_args:
     strategy_name: vllm
     strategy_config:
-      gpu_memory_utilization: 0.1  # 降低到 10% 以避免显存不足（可用 11.53 GiB，需要约 7.9 GiB）
+      gpu_memory_utilization: 0.4  # 从 0.1 增加到 0.4，确保有足够的 KV cache 内存
       tensor_parallel_size: 2
       block_size: 16
       load_format: auto
@@ -145,19 +145,12 @@ max_tokens_per_step: 512
 custom_envs:
   OSWorld1:
     env_type: osworld
-    max_steps: 5
+    max_steps: 10
     max_tokens_per_step: 128
     env_manager_cls: ${env_manager_cls}
     use_thread_lock: true
-    agent_system_template: ${osworld_system_template}
-    agent_template: |
-      Turn {turn_idx}:
-      Observation:
-      {observation}
-      格式示例：
-      ```python
-      pyautogui.hotkey('ctrl','alt','t'); pyautogui.write("echo hello", interval=0.02); pyautogui.press('enter')
-      ```
+    agent_system_template: ${osworld_linux_system_template}
+    agent_template: ${osworld_linux_agent_template}
     env_config:
       action_pattern: "```(?:python)?\\s*(.*?)```"
       conda_env_name: osworld
@@ -165,12 +158,12 @@ custom_envs:
       observation_type: terminal
       action_space: pyautogui
       headless: true
-      task_config_path: evaluation_examples/test_malicious_tasks.json
+      task_config_path: evaluation_examples/test_genearl_harm.json
       format_penalty: ${osworld_format_penalty}
       server_log_dir: ${oc.env:HYDRA_RUN_DIR,./output/logs/osworld_fallback}
       path_to_vm: js2.blockelite.cn:12923:12976
       instance_name: 13799886598_lyg1029_21f68e3d44d04b77a4e26d2d96617003_u0_c0
-      image_name: ubuntu24_nvram_base_uimg.13aacf.v2512021400
+      image_name: ubuntu24_nvram_base_uimg.0dbc0d.v2512261902
       client_password: ChaiY3ot
       sleep_after_execution: 3
       static_detector:
@@ -188,19 +181,12 @@ custom_envs:
 
   OSWorld2:
     env_type: osworld
-    max_steps: 5
+    max_steps: 10
     max_tokens_per_step: 128
     env_manager_cls: ${env_manager_cls}
     use_thread_lock: true
-    agent_system_template: ${osworld_system_template}
-    agent_template: |
-      Turn {turn_idx}:
-      Observation:
-      {observation}
-      格式示例：
-      ```python
-      pyautogui.hotkey('ctrl','alt','t'); pyautogui.write("echo hello", interval=0.02); pyautogui.press('enter')
-      ```
+    agent_system_template: ${osworld_linux_system_template}
+    agent_template: ${osworld_linux_agent_template}
     env_config:
       action_pattern: "```(?:python)?\\s*(.*?)```"
       conda_env_name: osworld
@@ -208,12 +194,12 @@ custom_envs:
       observation_type: terminal
       action_space: pyautogui
       headless: true
-      task_config_path: evaluation_examples/test_malicious_tasks.json
+      task_config_path: evaluation_examples/test_genearl_harm.json
       format_penalty: ${osworld_format_penalty}
       server_log_dir: ${oc.env:HYDRA_RUN_DIR,./output/logs/osworld_fallback}
       path_to_vm: js1.blockelite.cn:26031:26088
       instance_name: 13799886598_lyg0150_61e27cd1491947e18bc712282abc336b_u0_c0
-      image_name: ubuntu24_nvram_base_uimg.13aacf.v2512021400
+      image_name: ubuntu24_nvram_base_uimg.0dbc0d.v2512261902
       client_password: ChaiY3ot
       sleep_after_execution: 3
       static_detector:

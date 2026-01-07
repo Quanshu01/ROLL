@@ -118,11 +118,16 @@ class GroupQueue:
         return None
 
     def put(self, episode_id, start_step, rollout):
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug(f"[GroupQueue.put] episode_id={episode_id}, start_step={start_step}, groups={list(self.groups.keys())}")
         if episode_id not in self.groups: # ignore rollouts from outdated episode
+            logger.warning(f"[GroupQueue.put] episode_id {episode_id} not in groups, ignoring rollout")
             return
         group = self.groups[episode_id]
         assert start_step >= group.create_step, f"{start_step=} {group.create_step=}"
         group.rollouts.append(rollout)
+        logger.debug(f"[GroupQueue.put] Added rollout, group {self.group_id} episode {episode_id} now has {len(group.rollouts)}/{self.group_size} rollouts")
         if len(group.rollouts) == self.group_size:
             if all(rollout is None for rollout in group.rollouts):
                 logger.info(f"GroupQueue: group {self.group_id} exit")
@@ -239,11 +244,22 @@ class GroupQueueManager:
             group_queue.shutdown()
 
     def put(self, group_id, episode_id, start_step, rollout: DataProto):
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"[GroupQueueManager.put] Received put request: group_id={group_id}, episode_id={episode_id}, start_step={start_step}")
         assert group_id in self.group_queue
         self.waiting += 1
-        self.group_queue[group_id].put(episode_id, start_step, rollout)
-        self.waiting -= 1
-        self.total += 1
+        try:
+            self.group_queue[group_id].put(episode_id, start_step, rollout)
+            logger.info(f"[GroupQueueManager.put] Successfully put rollout: group_id={group_id}, episode_id={episode_id}")
+        except Exception as e:
+            logger.error(f"[GroupQueueManager.put] Error in put: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            raise
+        finally:
+            self.waiting -= 1
+            self.total += 1
 
     async def get_batch(self, batch_size, current_step) -> List[DataProto]:
         """

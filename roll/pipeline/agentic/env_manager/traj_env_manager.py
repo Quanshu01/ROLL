@@ -40,6 +40,7 @@ if OSWORLD_PATH not in sys.path:
 
 run_step_pytest = None
 RuleBasedEvaluator = None
+llm_judge_task_completion = None
 
 try:
     from desktop_env.evaluators.metrics.step_pytest_runner import run_step_pytest
@@ -54,6 +55,39 @@ except ImportError as e:
     import logging
     logger = logging.getLogger(__name__)
     logger.debug(f"Failed to import RuleBasedEvaluator: {e}")
+
+# Import llm_judge function from OSWorld-dev (same as lib_run_single.py)
+llm_judge_task_completion = None
+try:
+    import types
+    # Try normal import first
+    try:
+        from lib_run_single import llm_judge_task_completion
+    except ImportError:
+        # If import fails due to missing wrapt_timeout_decorator, create a mock module
+        mock_wrapt = types.ModuleType('wrapt_timeout_decorator')
+        sys.modules['wrapt_timeout_decorator'] = mock_wrapt
+        from lib_run_single import llm_judge_task_completion
+except ImportError as e:
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.warning(f"Failed to import llm_judge_task_completion from lib_run_single: {e}. LLM judge will be disabled.")
+
+# Import llm_judge function from OSWorld-dev (same as lib_run_single.py)
+try:
+    import types
+    # Try normal import first
+    try:
+        from lib_run_single import llm_judge_task_completion
+    except ImportError:
+        # If import fails due to missing wrapt_timeout_decorator, create a mock module
+        mock_wrapt = types.ModuleType('wrapt_timeout_decorator')
+        sys.modules['wrapt_timeout_decorator'] = mock_wrapt
+        from lib_run_single import llm_judge_task_completion
+except ImportError as e:
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.warning(f"Failed to import llm_judge_task_completion from lib_run_single: {e}. LLM judge will be disabled.")
 
 
 class TrajEnvManager(BaseEnvManager):
@@ -154,7 +188,31 @@ class TrajEnvManager(BaseEnvManager):
                 rollout.non_tensor_batch["traj_group_id"] = np.array([traj_group_id] * rollout.batch.batch_size[0], dtype=object)
                 rollout.non_tensor_batch["traj_id"] = np.array([traj_id] * rollout.batch.batch_size[0], dtype=object)
                 
-                ray.get(self.output_queue.put.remote(self.env_config['group_id'], self.episode_id, start_step, rollout))
+                # 添加调试日志和超时机制
+                self.logger.info(
+                    f"[formulate_rollouts] About to put rollout to queue: "
+                    f"group_id={self.env_config['group_id']}, episode_id={self.episode_id}, start_step={start_step}, "
+                    f"traj_id={traj_id}"
+                )
+                try:
+                    put_ref = self.output_queue.put.remote(self.env_config['group_id'], self.episode_id, start_step, rollout)
+                    import ray
+                    result = ray.get(put_ref, timeout=120.0)  # 120秒超时
+                    self.logger.info(f"[formulate_rollouts] Successfully put rollout to queue")
+                except ray.exceptions.GetTimeoutError:
+                    self.logger.error(
+                        f"[formulate_rollouts] TIMEOUT: Failed to put rollout to queue after 120s. "
+                        f"This may indicate a deadlock or queue blocking issue. "
+                        f"group_id={self.env_config['group_id']}, episode_id={self.episode_id}"
+                    )
+                    # 继续执行，避免完全卡死，但记录错误
+                    import traceback
+                    self.logger.error(traceback.format_exc())
+                except Exception as e:
+                    self.logger.error(f"[formulate_rollouts] Error putting rollout to queue: {e}")
+                    import traceback
+                    self.logger.error(traceback.format_exc())
+                    raise
                 rollout_cache = self.reset()
                 start_step = self.current_step
 
@@ -247,31 +305,10 @@ class TrajEnvManager(BaseEnvManager):
         self._run_linux_pytest_evaluator()
 
         # 6. 打印日志（在评估器运行后，显示更新后的reward和cost）
-        # 改进 observation preview：如果是字符串，显示开头和结尾；如果是字典，显示关键字段
-        obs_preview = ""
-        if isinstance(observation, str):
-            obs_len = len(observation)
-            if obs_len > 2000:
-                # 显示前1000和后1000个字符，中间用省略号
-                obs_preview = f"{observation[:1000]}... [truncated {obs_len - 2000} chars] ...{observation[-1000:]}"
-            else:
-                obs_preview = observation
-        elif isinstance(observation, dict):
-            # 如果是字典，尝试提取关键信息
-            terminal = observation.get('terminal', 'N/A')
-            if terminal and terminal != 'N/A':
-                obs_preview = f"Terminal: {str(terminal)[:500]}"
-            else:
-                # 显示字典的关键字段
-                keys = list(observation.keys())[:5]
-                obs_preview = f"Observation keys: {keys}, content preview: {str(observation)[:1000]}"
-        else:
-            obs_preview = str(observation)[:2000]
-        
         self.logger.info(
             f"[Step {self.rollout_cache.step}] ENV STEP RESULT:\n"
             f"Reward: {history_item.get('reward', 0)}, Cost: {history_item.get('cost', 0)}, Done={terminated}\n"
-            f"Observation preview ({len(str(observation))} chars): {obs_preview}\n"
+            f"Observation preview: {str(observation)[:2000]}\n"
         )
 
         # 7. 准备下一步
@@ -311,6 +348,50 @@ class TrajEnvManager(BaseEnvManager):
     #                               评估器实现
     # =========================================================================
 
+    def _get_task_type(self, task_id: str) -> str:
+        """
+        根据任务ID从配置文件中获取任务类型（general 或 harm）。
+        
+        Args:
+            task_id: 任务ID
+            
+        Returns:
+            任务类型字符串（'general' 或 'harm'），如果找不到则返回 'task'
+        """
+        try:
+            # 从 env_config 中获取 task_config_path
+            config = self.env_config.get('config', {})
+            task_config_path = config.get('task_config_path')
+            if not task_config_path:
+                return 'task'
+            
+            # 处理相对路径（相对于 OSWorld-dev 目录）
+            if not os.path.isabs(task_config_path):
+                task_config_path = os.path.join(OSWORLD_PATH, task_config_path)
+            
+            # 加载 JSON 配置文件
+            if not os.path.exists(task_config_path):
+                self.logger.debug(f"Task config file not found: {task_config_path}")
+                return 'task'
+            
+            with open(task_config_path, 'r', encoding='utf-8') as f:
+                task_config = json.load(f)
+            
+            # 查找任务ID在哪个列表中
+            if 'general' in task_config and isinstance(task_config['general'], list):
+                if task_id in task_config['general']:
+                    return 'general'
+            
+            if 'harm' in task_config and isinstance(task_config['harm'], list):
+                if task_id in task_config['harm']:
+                    return 'harm'
+            
+            # 如果找不到，返回默认值
+            return 'task'
+        except Exception as e:
+            self.logger.debug(f"Failed to get task type for {task_id}: {e}")
+            return 'task'
+    
     def _get_task_id(self) -> Optional[str]:
         """
         获取当前任务的 ID，用于生成唯一的结果目录。
@@ -486,12 +567,23 @@ class TrajEnvManager(BaseEnvManager):
             # 创建环境对象（用于 pytest runner）
             env_obj = None
             if hasattr(self.env, 'get_vm_info'):
-                info = self.env.get_vm_info()
-                if info and isinstance(info, dict) and 'result' in info:
-                    result = info.get('result')
-                    if result:
+                try:
+                    info = self.env.get_vm_info()
+                    self.logger.debug(f"[_run_linux_pytest_evaluator] get_vm_info returned: {info}")
+                    # get_vm_info() 返回的可能是 {'result': {...}} 或直接的 {'vm_ip': ..., 'server_port': ...}
+                    result = None
+                    if info and isinstance(info, dict):
+                        if 'result' in info:
+                            # 格式1: {'result': {'vm_ip': ..., 'server_port': ...}}
+                            result = info.get('result')
+                        elif 'vm_ip' in info and 'server_port' in info:
+                            # 格式2: 直接返回 {'vm_ip': ..., 'server_port': ...}
+                            result = info
+                    
+                    if result and isinstance(result, dict):
                         vm_ip = result.get('vm_ip')
                         server_port = result.get('server_port')
+                        self.logger.debug(f"[_run_linux_pytest_evaluator] vm_ip={vm_ip}, server_port={server_port}")
                         # 确保 vm_ip 和 server_port 都是有效的
                         if vm_ip and server_port is not None:
                             # 确保 server_port 是整数
@@ -506,6 +598,18 @@ class TrajEnvManager(BaseEnvManager):
                                         self.vm_ip = str(i).strip()
                                         self.server_port = int(p)
                                 env_obj = V(vm_ip, server_port)
+                                self.logger.info(f"[_run_linux_pytest_evaluator] Created env_obj with vm_ip={vm_ip}, server_port={server_port}")
+                            else:
+                                self.logger.warning(f"[_run_linux_pytest_evaluator] vm_ip is empty after validation")
+                        else:
+                            self.logger.warning(f"[_run_linux_pytest_evaluator] vm_ip or server_port is None/invalid: vm_ip={vm_ip}, server_port={server_port}")
+                    else:
+                        self.logger.warning(f"[_run_linux_pytest_evaluator] get_vm_info returned invalid format or None: {info}")
+                except Exception as e:
+                    self.logger.warning(f"[_run_linux_pytest_evaluator] Failed to get_vm_info: {e}", exc_info=True)
+            
+            if env_obj is None:
+                self.logger.warning(f"[_run_linux_pytest_evaluator] env_obj is None, pytest may not be able to connect to VM (OSWORLD_VM_IP/PORT not set)")
 
             # 获取任务 ID 用于生成唯一的 result_dir
             task_id = self._get_task_id() or "unknown"
@@ -533,11 +637,14 @@ class TrajEnvManager(BaseEnvManager):
                 self._pytest_task_timestamp is None or
                 self._pytest_task_key != episode_task_key or
                 not self._pytest_task_result_dir.exists()):
+                # 获取任务类型（general 或 harm）
+                task_type = self._get_task_type(task_id)
+                
                 # 创建任务级别的目录（带时间戳）
                 timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
                 task_result_dir = pytest_root / (
                     f"linux_pytest_{tag}_{mode_str}_env{self.env_config.get('env_id', 0)}_"
-                    f"ep{current_episode_id}_task{task_id}_{timestamp}"
+                    f"ep{current_episode_id}_{task_type}_{task_id}_{timestamp}"
                 )
                 task_result_dir.mkdir(parents=True, exist_ok=True)
                 self._pytest_task_result_dir = task_result_dir
@@ -547,7 +654,7 @@ class TrajEnvManager(BaseEnvManager):
                     f"Created new pytest task directory: {task_result_dir} (episode={current_episode_id}, task={task_id})"
                 )
             
-            # 所有步骤的结果直接保存在任务级别的目录中，文件名会带步骤前缀
+            # 所有步骤的结果直接保存在任务目录中（与Windows格式一致，不创建step子文件夹）
             # 设置环境变量为任务级别的目录（pytest runner 会使用这个）
             os.environ["OSWORLD_RESULT_DIR"] = str(self._pytest_task_result_dir)
             
@@ -556,6 +663,29 @@ class TrajEnvManager(BaseEnvManager):
 
             # 从配置中写入 manifests（不再硬编码任务特定逻辑）
             self._write_manifests_from_config(result_dir, cfg)
+            
+            # Save trajectory to traj.jsonl (like OSWorld-dev lib_run_single.py does)
+            # This is needed for llm_judge to work
+            if self.rollout_cache.history:
+                traj_file = result_dir / "traj.jsonl"
+                try:
+                    # Get current step data
+                    current_step_data = self.rollout_cache.history[-1]
+                    traj_entry = {
+                        "step_num": step_num,
+                        "action": current_step_data.get('action', ''),
+                        "reward": current_step_data.get('reward', 0),
+                        "cost": current_step_data.get('cost', 0),
+                        "done": self.rollout_cache.terminated,
+                        "truncated": self.rollout_cache.truncated,
+                        "info": current_step_data.get('info', {}),
+                        "observation": current_step_data.get('observation', '')
+                    }
+                    # Append to traj.jsonl (like OSWorld-dev does)
+                    with open(traj_file, 'a', encoding='utf-8') as f:
+                        f.write(json.dumps(traj_entry, ensure_ascii=False) + '\n')
+                except Exception as e:
+                    self.logger.warning(f"Failed to save trajectory to traj.jsonl: {e}")
 
             self.logger.info(
                 f"Step {step_num}: Running Linux Pytest... "
@@ -569,27 +699,14 @@ class TrajEnvManager(BaseEnvManager):
             if not summary:
                 self.logger.warning("Linux Pytest returned empty summary.")
                 return
-            
-            # 重命名/复制文件，添加步骤前缀
-            # pytest_step_{step}.xml -> step_{step}_pytest_step_{step}.xml
-            pytest_xml_old = result_dir / f"pytest_step_{step_num}.xml"
-            pytest_xml_new = result_dir / f"step_{step_num}_pytest_step_{step_num}.xml"
-            if pytest_xml_old.exists():
-                pytest_xml_old.rename(pytest_xml_new)
-                self.logger.debug(f"Renamed {pytest_xml_old.name} -> {pytest_xml_new.name}")
-            
-            # linux_state_monitoring.json 是跨步骤共享的状态文件，需要保留
-            # 不再为每个步骤复制快照文件，只保留一个总的监控文件
-            
-            # step_results.jsonl 不需要重命名，所有步骤的结果都追加到这个文件
 
             # 解析评估结果
-            reward_val = None
-            cost_val = None
+            reward_val = 0.0  # 默认值
+            cost_val = 0.0    # 默认值
             if 'breakdown' in summary:
                 res = summary['breakdown'].get('summary', {}) or {}
-                reward_val = res.get('reward_total')
-                cost_val = res.get('cost_total')
+                reward_val = res.get('reward_total', 0.0)
+                cost_val = res.get('cost_total', 0.0)
                 self.logger.info(f"Linux Pytest Result (with grading): {res}")
             else:
                 # 兼容 fallback 计数格式
@@ -601,12 +718,10 @@ class TrajEnvManager(BaseEnvManager):
                     cost_val = float(cost_info.get('failed', 0))
                 self.logger.info(f"Linux Pytest Result (fallback): reward={reward_val}, cost={cost_val}")
 
-            # 写入结果到 history
+            # 写入结果到 history（确保总是写入，即使值为0.0）
             hist = self.rollout_cache.history[-1]
-            if reward_val is not None:
-                hist['reward'] = float(reward_val)
-            if cost_val is not None:
-                hist['cost'] = float(cost_val)
+            hist['reward'] = float(reward_val) if reward_val is not None else 0.0
+            hist['cost'] = float(cost_val) if cost_val is not None else 0.0
 
         except Exception as e:
             self.logger.warning(f"Linux Pytest evaluator failed: {e}")
@@ -770,6 +885,87 @@ class TrajEnvManager(BaseEnvManager):
         ep_score = sum(scores)
         ep_cost = sum(costs)
 
+        # LLM judge evaluation (trajectory-level reward) - same as OSWorld-dev lib_run_single.py
+        # Check if llm_judge_result is already in the last step, otherwise try to call llm_judge
+        llm_judge_result = None
+        if history:
+            last_step = history[-1]
+            llm_judge_result = last_step.get('llm_judge_result')
+            
+            # If not already evaluated, try to call llm_judge (like OSWorld-dev does after the loop)
+            if llm_judge_result is None and llm_judge_task_completion is not None:
+                # Get pytest result directory (where traj.jsonl should be)
+                pytest_result_dir = self._pytest_task_result_dir
+                self.logger.info(f"LLM judge check: pytest_result_dir={pytest_result_dir}, exists={pytest_result_dir.exists() if pytest_result_dir else False}")
+                if pytest_result_dir and pytest_result_dir.exists():
+                    traj_file = pytest_result_dir / "traj.jsonl"
+                    instruction = last_step.get('env_instruction') or (history[0].get('env_instruction') if history else None)
+                    self.logger.info(f"LLM judge check: traj_file={traj_file}, exists={traj_file.exists()}, instruction={bool(instruction)}")
+                    
+                    if traj_file.exists() and instruction:
+                        try:
+                            judge_model = os.getenv("LLM_JUDGE_MODEL", "gpt-4")
+                            llm_judge_detail = llm_judge_task_completion(
+                                traj_file=str(traj_file),
+                                instruction=instruction,
+                                result_dir=str(pytest_result_dir),
+                                model=judge_model
+                            )
+                            llm_judge_result = llm_judge_detail.get("result", 0)
+                            self.logger.info(f"LLM judge result: {llm_judge_result} (1=completed, 0=not completed)")
+                            
+                            # Explicitly save llm_judge_result.json to pytest result directory
+                            # This ensures the file is saved even if TaskCompletionJudge.judge() fails internally
+                            llm_judge_result_file = pytest_result_dir / "llm_judge_result.json"
+                            try:
+                                import json
+                                with open(llm_judge_result_file, 'w', encoding='utf-8') as f:
+                                    json.dump(llm_judge_detail, f, indent=2, ensure_ascii=False)
+                                self.logger.info(f"LLM judge result saved to: {llm_judge_result_file}")
+                            except Exception as save_e:
+                                self.logger.warning(f"Failed to save LLM judge result to {llm_judge_result_file}: {save_e}")
+                            
+                            # Save to history's last step (so it can be used later)
+                            last_step['llm_judge_result'] = llm_judge_result
+                            last_step['llm_judge_detail'] = {
+                                "completed": llm_judge_detail.get("completed", False),
+                                "reason": llm_judge_detail.get("reason", ""),
+                                "error": llm_judge_detail.get("error"),
+                                "prompt": llm_judge_detail.get("prompt"),
+                                "response": llm_judge_detail.get("response"),
+                                "model": llm_judge_detail.get("model"),
+                                "api_base": llm_judge_detail.get("api_base")
+                            }
+                        except Exception as e:
+                            self.logger.warning(f"LLM judge evaluation failed: {e}")
+                            self.logger.debug(traceback.format_exc())
+                            # Save error detail to file even when exception occurs
+                            try:
+                                import json
+                                error_detail = {
+                                    "result": 0,
+                                    "completed": False,
+                                    "reason": "",
+                                    "prompt": None,
+                                    "response": None,
+                                    "error": f"Exception during LLM judge evaluation: {str(e)}"
+                                }
+                                llm_judge_result_file = pytest_result_dir / "llm_judge_result.json"
+                                with open(llm_judge_result_file, 'w', encoding='utf-8') as f:
+                                    json.dump(error_detail, f, indent=2, ensure_ascii=False)
+                                self.logger.info(f"LLM judge error detail saved to: {llm_judge_result_file}")
+                            except Exception as save_e:
+                                self.logger.warning(f"Failed to save LLM judge error detail: {save_e}")
+            
+            # Use llm_judge_result as episode reward if available
+            if llm_judge_result is not None:
+                try:
+                    llm_judge_result = float(llm_judge_result)
+                    self.logger.info(f"Using LLM judge result as episode reward: {llm_judge_result} (pytest reward: {ep_score})")
+                    ep_score = llm_judge_result
+                except (ValueError, TypeError):
+                    self.logger.warning(f"Invalid llm_judge_result value: {llm_judge_result}, using pytest reward instead")
+
         if ep_score == 0 and hasattr(self.env, 'evaluate'):
             try:
                 eval_score = self.env.evaluate()
@@ -810,8 +1006,18 @@ class TrajEnvManager(BaseEnvManager):
         }, batch_size=1)
         
         # 计算 Response Level Reward (RL 训练必需)
-        response_level = float(ep_score) - float(ep_cost)
+        # Formula: R = reward - cost_coef * cost
+        # Default cost_coef is 0.3, can be configured via env_config.reward_cost_coef
+        cost_coef = float(self.env_config.get('reward_cost_coef', 0.3))
+        response_level = float(ep_score) - cost_coef * float(ep_cost)
         lm_input.batch["response_level_rewards"] = torch.tensor([response_level], dtype=torch.float)
+        
+        # 记录 response_level 计算详情（用于调试和监控）
+        self.logger.info(
+            f"[formulate_rollouts] Response Level Reward Calculation: "
+            f"ep_score={ep_score:.4f}, ep_cost={ep_cost:.4f}, cost_coef={cost_coef:.4f}, "
+            f"response_level={response_level:.4f} (R = {ep_score:.4f} - {cost_coef:.4f} * {ep_cost:.4f})"
+        )
 
         # 补全 non_tensor_batch (解决 KeyError: step_scores)
         lm_input.non_tensor_batch.update({

@@ -6,6 +6,9 @@ import struct
 import traceback
 import logging
 import random
+import tempfile
+import shutil
+import types
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -13,12 +16,35 @@ logger = logging.getLogger("OSWorldServer")
 
 # Add OSWorld to path
 OSWORLD_PATH = "/data/share/projects/quanshu/OSWorld-dev"
+# Prepend to sys.path so the local working copy is used before any installed package.
 if OSWORLD_PATH not in sys.path:
-    sys.path.append(OSWORLD_PATH)
+    sys.path.insert(0, OSWORLD_PATH)
 
 try:
     from desktop_env.desktop_env import DesktopEnv
     from mm_agents.agent import linearize_accessibility_tree, parse_code_from_string
+    # Import llm_judge function from OSWorld-dev
+    # Note: lib_run_single.py has a top-level import of wrapt_timeout_decorator which is not available
+    # Since llm_judge_task_completion doesn't use wrapt_timeout_decorator, we can work around this
+    # by creating a mock module before importing
+    try:
+        # First try normal import (if wrapt_timeout_decorator is installed)
+        from lib_run_single import llm_judge_task_completion
+        LLM_JUDGE_AVAILABLE = True
+    except ImportError:
+        # If import fails due to missing wrapt_timeout_decorator, create a mock module
+        try:
+            # Create a mock module for wrapt_timeout_decorator
+            mock_wrapt = types.ModuleType('wrapt_timeout_decorator')
+            sys.modules['wrapt_timeout_decorator'] = mock_wrapt
+            # Now try importing again
+            from lib_run_single import llm_judge_task_completion
+            LLM_JUDGE_AVAILABLE = True
+            logger.info("Successfully imported llm_judge_task_completion using mock for wrapt_timeout_decorator")
+        except Exception as e:
+            logger.warning(f"Failed to import llm_judge_task_completion from lib_run_single: {e}. LLM judge will be disabled.")
+            llm_judge_task_completion = None
+            LLM_JUDGE_AVAILABLE = False
 except ImportError:
     logger.error(f"Could not import OSWorld modules from {OSWORLD_PATH}")
     sys.exit(1)
@@ -47,6 +73,31 @@ def recvall(sock, n):
             return None
         data.extend(packet)
     return data
+
+def fix_common_typos_in_code(code: str) -> str:
+    """
+    Fix common typos in Python code that cause execution failures.
+    This is a safety net for model-generated code.
+    """
+    # Common spelling errors and their corrections
+    fixes = [
+        # Most critical: pyautagui -> pyautogui (missing 'o' before 'g')
+        (r'\bpyautagui\b', 'pyautogui'),
+        # Other potential typos (less common but possible)
+        (r'\bpyautgu\b', 'pyautogui'),
+        (r'\bpyaugui\b', 'pyautogui'),
+        (r'\bpyautogi\b', 'pyautogui'),
+    ]
+    
+    fixed_code = code
+    for pattern, replacement in fixes:
+        import re
+        original = fixed_code
+        fixed_code = re.sub(pattern, replacement, fixed_code, flags=re.IGNORECASE)
+        if original != fixed_code:
+            logger.warning(f"Fixed typo in code: {pattern} -> {replacement}")
+    
+    return fixed_code
 
 class OSWorldServer:
     def __init__(self, host='localhost', port=0, 
@@ -123,7 +174,7 @@ class OSWorldServer:
                     # If key is 'linux_pytest', look in 'linux_pytest' subdirectory
                     subdir = None
                     for key in loaded.keys():
-                        if key in ['linux_pytest', 'windows_pytest', 'os', 'malicious_tests', 'tb_tasks']:
+                        if key in ['linux_pytest', 'windows_pytest', 'os', 'malicious_tests', 'tb_tasks', 'general', 'harm']:
                             subdir = key
                             break
                     
@@ -135,6 +186,8 @@ class OSWorldServer:
                             os.path.join(OSWORLD_PATH, 'evaluation_examples', 'examples', 'tb_tasks', f'{tid}.json'),
                             os.path.join(OSWORLD_PATH, 'evaluation_examples', 'examples', 'linux_pytest', f'{tid}.json'),
                             os.path.join(OSWORLD_PATH, 'evaluation_examples', 'examples', 'windows_pytest', f'{tid}.json'),
+                            os.path.join(OSWORLD_PATH, 'evaluation_examples', 'examples', 'general', f'{tid}.json'),
+                            os.path.join(OSWORLD_PATH, 'evaluation_examples', 'examples', 'harm', f'{tid}.json'),
                         ]
                         # If we identified a specific subdirectory, prioritize it
                         if subdir:
@@ -247,6 +300,9 @@ class OSWorldServer:
         
         self.current_task = None
         self.step_count = 0
+        # Initialize trajectory data list for llm_judge
+        self.trajectory_data = []
+        self.current_instruction = None
 
     def run(self):
         # Print the port so the parent process can read it
@@ -294,6 +350,45 @@ class OSWorldServer:
 
     def handle_reset(self, kwargs):
         try:
+            # Before resetting, evaluate the previous trajectory if it exists
+            # Save the previous task's result directory before it gets overwritten
+            prev_result_dir = os.getenv("OSWORLD_RESULT_DIR")
+            prev_trajectory_data = self.trajectory_data.copy() if self.trajectory_data else []
+            prev_instruction = self.current_instruction
+            
+            logger.info(f"handle_reset: prev_trajectory_data length={len(prev_trajectory_data)}, LLM_JUDGE_AVAILABLE={LLM_JUDGE_AVAILABLE}, llm_judge_task_completion={llm_judge_task_completion is not None}, prev_instruction={bool(prev_instruction)}")
+            
+            if len(prev_trajectory_data) > 0 and LLM_JUDGE_AVAILABLE and llm_judge_task_completion is not None and prev_instruction:
+                try:
+                    logger.info(f"Evaluating previous trajectory (step_count={self.step_count}) before reset...")
+                    if prev_result_dir and os.path.isdir(prev_result_dir):
+                        result_dir = prev_result_dir
+                    else:
+                        result_dir = tempfile.mkdtemp(prefix="osworld_traj_")
+                    
+                    traj_file = os.path.join(result_dir, "traj.jsonl")
+                    with open(traj_file, 'w', encoding='utf-8') as f:
+                        for entry in prev_trajectory_data:
+                            f.write(json.dumps(entry, ensure_ascii=False) + '\n')
+                    
+                    judge_model = os.getenv("LLM_JUDGE_MODEL", "gpt-4")
+                    llm_judge_detail = llm_judge_task_completion(
+                        traj_file=traj_file,
+                        instruction=prev_instruction,
+                        result_dir=result_dir,
+                        model=judge_model
+                    )
+                    logger.info(f"Previous trajectory LLM judge result: {llm_judge_detail.get('result', 0)}")
+                    
+                    # Save llm_judge_result.json to result_dir (pytest result directory)
+                    llm_judge_result_file = os.path.join(result_dir, "llm_judge_result.json")
+                    with open(llm_judge_result_file, 'w', encoding='utf-8') as f:
+                        json.dump(llm_judge_detail, f, indent=2, ensure_ascii=False)
+                    logger.info(f"LLM judge result saved to: {llm_judge_result_file}")
+                except Exception as e:
+                    logger.warning(f"Failed to evaluate previous trajectory: {e}")
+                    logger.debug(traceback.format_exc())
+            
             seed = kwargs.get('seed')
             if seed is not None:
                 random.seed(seed)
@@ -316,13 +411,17 @@ class OSWorldServer:
             # Perform reset on underlying DesktopEnv
             self.env.reset(task_config=self.current_task)
             self.step_count = 0
+            
+            # Initialize trajectory data for llm_judge
+            self.trajectory_data = []
+            self.current_instruction = self.current_task.get('instruction', "") if isinstance(self.current_task, dict) else ""
 
             obs = self.env._get_obs()
             obs_text = self._process_obs(obs)
 
             # For reset, return (observation, info) — the env manager expects two items
             # Pass step_pytest config from task to info so traj_env_manager can use it
-            info = {"env_instruction": self.current_task.get('instruction', "") if isinstance(self.current_task, dict) else ""}
+            info = {"env_instruction": self.current_instruction}
             if isinstance(self.current_task, dict):
                 # 将完整的任务信息传递给 info，方便 traj_env_manager 获取任务ID
                 info['task'] = self.current_task
@@ -342,27 +441,57 @@ class OSWorldServer:
         """Get VM connection information for pytest runner.
 
         优先返回 DesktopEnv 自带的 vm_ip/server_port。
-        若没有，则尝试从 controller.http_server 解析 host/port，
+        若没有，则尝试从 controller 获取 vm_ip/server_port，
+        最后尝试从 controller.http_server 解析 host/port，
         方便 step_pytest_runner 设置 OSWORLD_VM_IP/PORT 给 vm_client。
         """
         # Case 1: DesktopEnv 显式暴露 vm_ip/server_port
         if self.env and hasattr(self.env, 'vm_ip') and hasattr(self.env, 'server_port'):
-            vm_ip = str(self.env.vm_ip).strip()
-            server_port = self.env.server_port
-            # 确保 server_port 是整数
-            try:
-                server_port = int(server_port)
-            except (ValueError, TypeError):
-                logger.warning(f"Invalid server_port type: {type(server_port)}, value: {server_port}")
-                server_port = 5000  # 默认端口
-            return {
-                'result': {
-                    'vm_ip': vm_ip,
-                    'server_port': server_port
-                }
-            }
+            vm_ip = getattr(self.env, 'vm_ip', None)
+            server_port = getattr(self.env, 'server_port', None)
+            if vm_ip and server_port is not None:
+                vm_ip = str(vm_ip).strip()
+                # 确保 server_port 是整数
+                try:
+                    server_port = int(server_port)
+                except (ValueError, TypeError):
+                    logger.warning(f"Invalid server_port type: {type(server_port)}, value: {server_port}")
+                    server_port = 5000  # 默认端口
+                if vm_ip:  # 确保 vm_ip 不为空
+                    logger.info(f"handle_get_vm_info: Using DesktopEnv attributes: vm_ip={vm_ip}, server_port={server_port}")
+                    return {
+                        'result': {
+                            'vm_ip': vm_ip,
+                            'server_port': server_port
+                        }
+                    }
 
-        # Case 2: 从 controller.http_server 解析
+        # Case 2: 从 controller 获取 vm_ip/server_port
+        try:
+            if self.env and hasattr(self.env, 'controller'):
+                controller = self.env.controller
+                if hasattr(controller, 'vm_ip') and hasattr(controller, 'server_port'):
+                    vm_ip = getattr(controller, 'vm_ip', None)
+                    server_port = getattr(controller, 'server_port', None)
+                    if vm_ip and server_port is not None:
+                        vm_ip = str(vm_ip).strip()
+                        try:
+                            server_port = int(server_port)
+                        except (ValueError, TypeError):
+                            logger.warning(f"Invalid server_port from controller: {server_port}")
+                            server_port = 5000
+                        if vm_ip:
+                            logger.info(f"handle_get_vm_info: Using controller attributes: vm_ip={vm_ip}, server_port={server_port}")
+                            return {
+                                'result': {
+                                    'vm_ip': vm_ip,
+                                    'server_port': server_port
+                                }
+                            }
+        except Exception as e:
+            logger.warning(f"Failed to get vm info from controller: {e}")
+
+        # Case 3: 从 controller.http_server 解析
         try:
             if self.env and hasattr(self.env, 'controller'):
                 http_server = getattr(self.env.controller, 'http_server', None)
@@ -376,6 +505,7 @@ class OSWorldServer:
                     except (ValueError, TypeError):
                         logger.warning(f"Invalid port in http_server: {http_server}, using default 5000")
                         port = 5000
+                    logger.info(f"handle_get_vm_info: Using http_server parsed: vm_ip={host}, server_port={port}")
                     return {
                         'result': {
                             'vm_ip': str(host).strip(),
@@ -385,6 +515,7 @@ class OSWorldServer:
         except Exception as e:
             logger.warning(f"Failed to parse controller http_server for vm info: {e}")
 
+        logger.warning("handle_get_vm_info: Could not determine vm_ip/server_port from any source")
         return {'result': None}
 
     def handle_step(self, args):
@@ -392,7 +523,14 @@ class OSWorldServer:
         self.step_count += 1
         
         logger.info(f"Step {self.step_count}: raw action: {action}")
+        # Fix common typos before parsing (especially pyautagui -> pyautogui)
+        action = fix_common_typos_in_code(action)
+        
         parsed_actions = parse_code_from_string(action)
+        
+        # Also fix typos in parsed code blocks (in case they were not caught earlier)
+        parsed_actions = [fix_common_typos_in_code(act) if isinstance(act, str) else act for act in parsed_actions]
+        
         logger.info(f"Step {self.step_count}: parsed_actions: {parsed_actions}")
 
         total_reward = 0
@@ -453,8 +591,10 @@ class OSWorldServer:
                  total_reward = 0
                  total_cost = 0
         
+        # Check if we've reached max steps (this indicates trajectory end due to truncation)
         if self.step_count >= self.max_steps:
             done = True
+            truncated = True
             
         # If obs is None (e.g. loop didn't run), get it
         if obs is None:
@@ -468,12 +608,6 @@ class OSWorldServer:
         if 'reward' in info:
             total_reward = info.get('reward', total_reward)
         
-        # Log reward and cost for debugging
-        logger.info(f"Step {self.step_count}: reward={total_reward}, cost={total_cost}, info_keys={list(info.keys())}")
-        if total_reward == 0 and total_cost == 0:
-            logger.warning(f"Step {self.step_count}: reward and cost are both 0. "
-                          f"Rule-based evaluator and pytest runner should populate these values in traj_env_manager.")
-        
         # Ensure cost is in info for traj_env_manager to access
         if 'cost' not in info:
             info['cost'] = total_cost
@@ -481,6 +615,105 @@ class OSWorldServer:
         # Info might contain non-serializable objects, filter it if necessary
         # For now, assume info is JSON serializable or empty
         safe_info = {k: v for k, v in info.items() if isinstance(v, (str, int, float, bool, list, dict, type(None)))}
+        
+        # Record trajectory data for llm_judge
+        traj_entry = {
+            "step_num": self.step_count,
+            "action": action,
+            "reward": total_reward,
+            "cost": total_cost,
+            "done": done,
+            "truncated": truncated,
+            "info": safe_info
+        }
+        # Add observation, especially terminal output for llm_judge
+        if obs is not None:
+            traj_entry["observation"] = {
+                "terminal": obs.get("terminal"),
+                "has_screenshot": obs.get("screenshot") is not None,
+                "has_accessibility_tree": obs.get("accessibility_tree") is not None
+            }
+        self.trajectory_data.append(traj_entry)
+        
+        # Log reward and cost for debugging
+        logger.info(f"Step {self.step_count}: reward={total_reward}, cost={total_cost}, done={done}, truncated={truncated}, info_keys={list(info.keys())}")
+        if total_reward == 0 and total_cost == 0:
+            logger.debug(f"Step {self.step_count}: reward and cost are both 0. "
+                          f"Rule-based evaluator and pytest runner should populate these values in traj_env_manager.")
+        
+        # Call llm_judge when trajectory ends (done=True or truncated=True)
+        # This covers both normal completion and max steps truncation
+        logger.debug(f"LLM judge check: done={done}, truncated={truncated}, LLM_JUDGE_AVAILABLE={LLM_JUDGE_AVAILABLE}, llm_judge_task_completion={llm_judge_task_completion is not None}, current_instruction={bool(self.current_instruction)}")
+        if (done or truncated) and LLM_JUDGE_AVAILABLE and llm_judge_task_completion is not None and self.current_instruction:
+            try:
+                # Try to use pytest result directory if available (from OSWORLD_RESULT_DIR env var)
+                # Otherwise use temporary directory
+                pytest_result_dir = os.getenv("OSWORLD_RESULT_DIR")
+                if pytest_result_dir and os.path.isdir(pytest_result_dir):
+                    result_dir = pytest_result_dir
+                    logger.info(f"Using pytest result directory for llm_judge: {result_dir}")
+                else:
+                    result_dir = tempfile.mkdtemp(prefix="osworld_traj_")
+                    logger.info(f"Using temporary directory for llm_judge: {result_dir}")
+                
+                traj_file = os.path.join(result_dir, "traj.jsonl")
+                
+                # Save trajectory data to file
+                with open(traj_file, 'w', encoding='utf-8') as f:
+                    for entry in self.trajectory_data:
+                        f.write(json.dumps(entry, ensure_ascii=False) + '\n')
+                
+                # Call llm_judge
+                judge_model = os.getenv("LLM_JUDGE_MODEL", "gpt-4")
+                llm_judge_detail = llm_judge_task_completion(
+                    traj_file=traj_file,
+                    instruction=self.current_instruction,
+                    result_dir=result_dir,
+                    model=judge_model
+                )
+                llm_judge_result = llm_judge_detail.get("result", 0)
+                logger.info(f"LLM judge result: {llm_judge_result} (1=completed, 0=not completed)")
+                if llm_judge_detail.get("reason"):
+                    logger.info(f"LLM judge reason: {llm_judge_detail['reason']}")
+                
+                # Save llm_judge_result.json to result_dir (pytest result directory)
+                # This ensures the file is saved for pytest evaluation
+                if result_dir and os.path.isdir(result_dir):
+                    llm_judge_result_file = os.path.join(result_dir, "llm_judge_result.json")
+                    try:
+                        with open(llm_judge_result_file, 'w', encoding='utf-8') as f:
+                            json.dump(llm_judge_detail, f, indent=2, ensure_ascii=False)
+                        logger.info(f"LLM judge result saved to: {llm_judge_result_file}")
+                    except Exception as save_e:
+                        logger.warning(f"Failed to save LLM judge result to {llm_judge_result_file}: {save_e}")
+                
+                # Add llm_judge result to info (include full detail with prompt and response)
+                safe_info['llm_judge_result'] = llm_judge_result
+                # Save full llm_judge_detail including prompt and response
+                safe_info['llm_judge_detail'] = {
+                    "completed": llm_judge_detail.get("completed", False),
+                    "reason": llm_judge_detail.get("reason", ""),
+                    "error": llm_judge_detail.get("error"),
+                    "prompt": llm_judge_detail.get("prompt"),
+                    "response": llm_judge_detail.get("response"),
+                    "model": llm_judge_detail.get("model"),
+                    "api_base": llm_judge_detail.get("api_base")
+                }
+                
+                # Only clean up if we used a temporary directory (not pytest result directory)
+                # If pytest_result_dir was set and exists, we used it, so don't clean up
+                if pytest_result_dir is None or not os.path.isdir(pytest_result_dir):
+                    # We used a temporary directory, clean it up
+                    try:
+                        shutil.rmtree(result_dir)
+                    except Exception as e:
+                        logger.warning(f"Failed to clean up temp directory {result_dir}: {e}")
+            except Exception as e:
+                logger.warning(f"LLM judge evaluation failed: {e}")
+                logger.debug(traceback.format_exc())
+                # Add error info even if llm_judge failed
+                safe_info['llm_judge_result'] = 0
+                safe_info['llm_judge_error'] = str(e)
 
         # Ensure we return a 5-tuple: (observation, reward, done, truncated, info)
         # Note: cost is included in info dict for traj_env_manager to access
@@ -489,53 +722,107 @@ class OSWorldServer:
         }
 
     def _process_obs(self, obs):
+        # 首先检查观测是否为空或无效
+        if not obs or not isinstance(obs, dict):
+            logger.warning(f"_process_obs: obs is empty or not a dict. obs type: {type(obs)}, obs value: {repr(obs)[:200]}")
+            # 尝试返回一个有用的错误信息而不是空字符串
+            return f"[ERROR: Empty observation] obs type: {type(obs)}, value: {repr(obs)[:200]}"
+        
+        # 检查所有观测字段是否都为None
+        screenshot = obs.get("screenshot")
+        accessibility_tree = obs.get("accessibility_tree")
+        terminal = obs.get("terminal")
+        instruction = obs.get("instruction", "")
+        
+        all_none = (screenshot is None and accessibility_tree is None and terminal is None)
+        
+        if all_none:
+            logger.warning(f"_process_obs: All observation fields are None. obs keys: {list(obs.keys())}, instruction: {instruction[:100] if instruction else 'None'}")
+            # 如果有instruction，至少返回instruction，否则返回错误信息
+            if instruction:
+                return f"[WARNING: All observation fields are None, using instruction]\n{instruction}"
+            else:
+                return "[ERROR: All observation fields (screenshot, accessibility_tree, terminal) are None and no instruction available]"
+        
         # 观测类型：只用可访问性树
         if self.observation_type == "a11y_tree":
             try:
-                if not obs or not isinstance(obs, dict):
-                    logger.warning("_process_obs: obs is empty or not a dict, falling back to str(obs)")
-                    return str(obs)
-
-                tree = obs.get("accessibility_tree")
+                tree = accessibility_tree
                 if not tree:
-                    logger.warning("_process_obs: accessibility_tree is None or empty, falling back to str(obs)")
-                    return str(obs)
+                    # 尝试使用terminal作为fallback
+                    if terminal:
+                        logger.warning("_process_obs: accessibility_tree is None, falling back to terminal output")
+                        return terminal
+                    # 如果都没有，返回错误信息
+                    logger.warning("_process_obs: accessibility_tree is None and terminal is also None")
+                    fallback_msg = f"[WARNING: accessibility_tree is None]"
+                    if instruction:
+                        fallback_msg += f"\nInstruction: {instruction[:500]}"
+                    return fallback_msg
 
                 try:
-                    linearized = linearize_accessibility_tree(tree, platform="ubuntu")
+                    # 检测平台类型（从env获取或从tree推断）
+                    platform_type = "ubuntu"  # 默认值
+                    if hasattr(self, 'env') and hasattr(self.env, 'vm_platform'):
+                        vm_platform = self.env.vm_platform
+                        if vm_platform and "windows" in vm_platform.lower():
+                            platform_type = "windows"
+                        elif vm_platform and "darwin" in vm_platform.lower() or "mac" in vm_platform.lower():
+                            platform_type = "macos"
+                    
+                    linearized = linearize_accessibility_tree(tree, platform=platform_type)
+                    if not linearized or len(linearized.strip()) == 0:
+                        logger.warning("_process_obs: linearized accessibility_tree is empty")
+                        if terminal:
+                            return terminal
+                        return fallback_msg if 'fallback_msg' in locals() else "[WARNING: linearized accessibility_tree is empty]"
                     return linearized
                 except Exception as e:
                     logger.exception(f"Failed to linearize accessibility_tree: {e}")
-                    return str(obs)
+                    # 尝试使用terminal作为fallback
+                    if terminal:
+                        logger.warning("_process_obs: Failed to linearize accessibility_tree, falling back to terminal output")
+                        return terminal
+                    return f"[ERROR: Failed to linearize accessibility_tree: {e}]"
             except Exception as e:
                 logger.exception(f"Unexpected error while processing obs: {e}")
-                return str(obs)
+                if terminal:
+                    return terminal
+                return f"[ERROR: Unexpected error in _process_obs: {e}]"
 
         # 观测类型：只用终端输出（对齐 mm_agents.PromptAgent 的终端模式）
         if self.observation_type == "terminal":
             try:
-                if not obs or not isinstance(obs, dict):
-                    logger.warning("_process_obs(terminal): obs is empty or not a dict, falling back to str(obs)")
-                    return str(obs)
-                term = obs.get("terminal")
+                term = terminal
                 if term is None:
                     # 在很多 OSWorld 版本里，terminal 字段并不一定可用；为了避免上游拿到几乎
                     # 为空的信息（导致 prompt_length=0、Processed prompts: 0it），这里尝试
                     # 使用 a11y_tree 作为兜底文本。
-                    tree = obs.get("accessibility_tree")
+                    tree = accessibility_tree
                     if tree:
                         try:
-                            linearized = linearize_accessibility_tree(tree, platform="ubuntu")
+                            platform_type = "ubuntu"
+                            if hasattr(self, 'env') and hasattr(self.env, 'vm_platform'):
+                                vm_platform = self.env.vm_platform
+                                if vm_platform and "windows" in vm_platform.lower():
+                                    platform_type = "windows"
+                                elif vm_platform and ("darwin" in vm_platform.lower() or "mac" in vm_platform.lower()):
+                                    platform_type = "macos"
+                            
+                            linearized = linearize_accessibility_tree(tree, platform=platform_type)
                             logger.warning("_process_obs(terminal): terminal is None, falling back to linearized accessibility_tree")
                             return linearized
                         except Exception as e:
                             logger.exception(f"Failed to linearize accessibility_tree in terminal mode: {e}")
-                    logger.warning("_process_obs(terminal): terminal is None and no usable accessibility_tree, falling back to str(obs)")
-                    return str(obs)
+                    logger.warning("_process_obs(terminal): terminal is None and no usable accessibility_tree")
+                    fallback_msg = "[WARNING: terminal is None and no usable accessibility_tree]"
+                    if instruction:
+                        fallback_msg += f"\nInstruction: {instruction[:500]}"
+                    return fallback_msg
                 return term
             except Exception as e:
                 logger.exception(f"Unexpected error while processing terminal obs: {e}")
-                return str(obs)
+                return f"[ERROR: Unexpected error in terminal obs processing: {e}]"
 
         # 其它模式暂时保持原样：直接字符串化整个观测
         return str(obs)

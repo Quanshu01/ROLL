@@ -3,6 +3,7 @@ import os
 import logging
 import json
 import random
+import re
 import subprocess
 import socket
 import struct
@@ -198,13 +199,43 @@ class OSWorldEnv(Env):
             # 如果路径不可创建，回退 /tmp
             log_path = "/tmp/osworld_server.log"
         log_fh = open(log_path, "a", buffering=1)
+        
+        # Ensure HOME environment variable is valid before starting server
+        # This prevents errors like "52.9/home/vipuser" from being passed to subprocess
+        env = os.environ.copy()
+        home = env.get('HOME', '')
+        default_home = '/home/vipuser'
+        
+        # Validate HOME: must be absolute path, start with '/', and not contain invalid patterns
+        is_valid_home = (
+            home and
+            os.path.isabs(home) and
+            home.startswith('/') and
+            # Reject patterns like "52.9/home/vipuser" or "75.8/home/vipuser" (number.number/...)
+            not re.match(r'^\d+\.\d+/', home) and
+            # Reject patterns that look like IP addresses (e.g., "192.168.1.1")
+            not re.match(r'^\d+\.\d+\.\d+\.\d+', home)
+        )
+        
+        if not is_valid_home:
+            old_home = home if home else '(not set)'
+            env['HOME'] = default_home
+            logger.warning(
+                f"HOME environment variable was invalid (value: '{old_home}'), "
+                f"setting to '{default_home}' for OSWorld server subprocess"
+            )
+        else:
+            # Ensure HOME is set even if it was valid
+            env['HOME'] = home
+        
         self.server_process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
-            cwd="/data/share/projects/quanshu/OSWorld-dev"
+            cwd="/data/share/projects/quanshu/OSWorld-dev",
+            env=env  # Pass corrected environment
         )
         logger.info(f"OSWorld server stdout/stderr will be tee'd to {log_path}")
         
