@@ -717,25 +717,155 @@ def compute_advantage(
     whiten_advantages=False,
     whiten_rewards=False,
     response_mask=None,
+    cost_mode=False,  # 新增：是否为cost模式
 ):
+    """
+    Compute advantages and returns for either reward or cost.
+    
+    Args:
+        cost_mode: If True, compute cost advantages/returns using cost-related keys.
+                   If False (default), compute reward advantages/returns.
+    """
+    import time
+    start_time = time.time()
+    mode_str = "COST" if cost_mode else "REWARD"
+    logger.info(f"[DEBUG] [{mode_str}] compute_advantage 开始执行...")
+    
     if response_mask is None:
         response_mask = data.batch["response_mask"][:, 1:]
+    
+    batch_size = response_mask.shape[0]
+    seq_len = response_mask.shape[1]
+    valid_tokens = int(response_mask.sum().item())
+    logger.info(f"[DEBUG] [{mode_str}] 数据形状: batch_size={batch_size}, seq_len={seq_len}, valid_tokens={valid_tokens}")
+    
     if response_mask.sum() == 0:
         whiten_rewards = False
         whiten_advantages = False
         logger.info("Warning: domain final_response_mask.sum() == 0! All masked_whiten will be skipped.")
 
-    token_level_rewards = data.batch["token_level_rewards"].float()
+    # 根据cost_mode选择不同的key
+    if cost_mode:
+        # Cost模式：使用cost相关的key
+        token_level_key = "token_level_costs"  # 需要从episode_costs扩展得到
+        values_key = "cost_values"
+        advantages_key = "cost_advantages"
+        returns_key = "cost_returns"
+        raw_advantages_key = "raw_cost_advantages"
+        
+        # 如果没有token_level_costs，需要从episode_costs扩展
+        if token_level_key not in data.batch:
+            logger.info(f"[DEBUG] [{mode_str}] 开始从episode_costs扩展为token_level_costs...")
+            step_start = time.time()
+            # 从episode_costs扩展为token_level_costs（类似expand_to_token_level的逻辑）
+            if "episode_costs" in data.non_tensor_batch:
+                # 处理dtype=object的numpy数组：先转换为列表，再转换为tensor
+                episode_costs_raw = data.non_tensor_batch["episode_costs"]
+                logger.info(f"[DEBUG] [{mode_str}] episode_costs_raw类型: {type(episode_costs_raw)}, dtype={getattr(episode_costs_raw, 'dtype', 'N/A')}, shape={getattr(episode_costs_raw, 'shape', 'N/A')}")
+                if isinstance(episode_costs_raw, np.ndarray) and episode_costs_raw.dtype == object:
+                    # 如果是object类型数组，需要先转换为数值列表
+                    episode_costs_list = []
+                    for item in episode_costs_raw:
+                        if isinstance(item, (list, tuple)):
+                            # 如果是列表或元组，取第一个元素
+                            episode_costs_list.append(float(item[0]) if len(item) > 0 else 0.0)
+                        elif isinstance(item, np.ndarray):
+                            # 如果是numpy数组，转换为标量
+                            episode_costs_list.append(float(item.item()) if item.size == 1 else float(item[0]))
+                        elif isinstance(item, (int, float, np.number)):
+                            # 如果是数值类型，直接转换
+                            episode_costs_list.append(float(item))
+                        else:
+                            # 其他情况，尝试转换为浮点数
+                            episode_costs_list.append(float(item))
+
+                    episode_costs = torch.tensor(
+                        episode_costs_list,
+                        dtype=torch.float32,
+                        device=response_mask.device,
+                    )
+                else:
+                    # 尝试直接转换，如果失败则使用列表方式
+                    try:
+                        episode_costs = torch.tensor(
+                            episode_costs_raw,
+                            dtype=torch.float32,
+                            device=response_mask.device,
+                        )
+                    except (TypeError, ValueError):
+                        # 如果转换失败，使用列表方式
+                        episode_costs_list = [float(x) for x in np.array(episode_costs_raw).flatten()]
+                        episode_costs = torch.tensor(
+                            episode_costs_list,
+                            dtype=torch.float32,
+                            device=response_mask.device,
+                        )
+                # 扩展为token级别（只在最后一个token位置有cost）
+                logger.info(f"[DEBUG] [{mode_str}] episode_costs转换完成: shape={episode_costs.shape}, mean={episode_costs.mean().item():.6f}, sum={episode_costs.sum().item():.6f}")
+                logger.info(f"[DEBUG] [{mode_str}] 开始扩展为token级别costs...")
+                expand_start = time.time()
+                batch_size = response_mask.shape[0]
+                token_level_costs = torch.zeros_like(response_mask, dtype=torch.float32)
+                # 找到每个序列的最后一个有效位置（类似eos位置）
+                position_ids = data.batch.get("position_ids", None)
+                logger.info(f"[DEBUG] [{mode_str}] position_ids存在: {position_ids is not None}")
+                if position_ids is not None:
+                    if position_ids.dim() == 3:
+                        position_ids = position_ids[:, 0]  # 取第一维（文本）
+                    attention_mask = data.batch["attention_mask"]
+                    eos_mask_idx = torch.argmax(position_ids * attention_mask, dim=-1)
+                    # 调整索引：response_mask是去掉prompt后的，所以需要减去prompt长度
+                    prompt_length = attention_mask.shape[1] - response_mask.shape[1]
+                    response_eos_idx = torch.clamp(eos_mask_idx - prompt_length, min=0, max=response_mask.shape[1] - 1)
+                    token_level_costs[torch.arange(batch_size), response_eos_idx] = episode_costs.squeeze(-1) if episode_costs.dim() > 1 else episode_costs
+                else:
+                    # Fallback: 将cost放在最后一个非padding位置
+                    last_valid_idx = (response_mask.sum(dim=1) - 1).long().clamp(min=0)
+                    token_level_costs[torch.arange(batch_size), last_valid_idx] = episode_costs.squeeze(-1) if episode_costs.dim() > 1 else episode_costs
+                logger.info(f"[DEBUG] [{mode_str}] token级别costs扩展完成，耗时: {time.time() - expand_start:.3f}秒")
+                logger.info(f"[DEBUG] [{mode_str}] token_level_costs: shape={token_level_costs.shape}, mean={token_level_costs.mean().item():.6f}, sum={token_level_costs.sum().item():.6f}")
+                data.batch[token_level_key] = token_level_costs
+                logger.info(f"[DEBUG] [{mode_str}] episode_costs扩展总耗时: {time.time() - step_start:.3f}秒")
+            else:
+                raise ValueError(
+                    "cost_mode=True requires 'episode_costs' in data.non_tensor_batch "
+                    "or 'token_level_costs' in data.batch"
+                )
+    else:
+        # Reward模式（原有逻辑）
+        token_level_key = "token_level_rewards"
+        values_key = "values"
+        advantages_key = "advantages"
+        returns_key = "returns"
+        raw_advantages_key = "raw_advantages"
+
+    logger.info(f"[DEBUG] [{mode_str}] 开始处理token_level数据...")
+    process_start = time.time()
+    token_level_rewards = data.batch[token_level_key].float()
+    logger.info(f"[DEBUG] [{mode_str}] token_level_rewards原始: shape={token_level_rewards.shape}, mean={token_level_rewards.mean().item():.6f}, sum={token_level_rewards.sum().item():.6f}")
+    
     if whiten_rewards:
+        logger.info(f"[DEBUG] [{mode_str}] 执行whiten_rewards...")
+        whiten_start = time.time()
         token_level_rewards = masked_whiten(values=token_level_rewards, mask=response_mask)
+        logger.info(f"[DEBUG] [{mode_str}] whiten_rewards完成，耗时: {time.time() - whiten_start:.3f}秒")
+    
     token_level_rewards = token_level_rewards * response_mask
-    data.batch["token_level_rewards"] = token_level_rewards
+    data.batch[token_level_key] = token_level_rewards
+    logger.info(f"[DEBUG] [{mode_str}] token_level_rewards处理后: mean={token_level_rewards.mean().item():.6f}, sum={token_level_rewards.sum().item():.6f}")
+    
     if adv_estimator == "gae":
-        values = data.batch["values"].float()
-        data.batch["values"] = values * response_mask
+        logger.info(f"[DEBUG] [{mode_str}] 使用GAE估计器计算advantage...")
+        gae_start = time.time()
+        if values_key not in data.batch:
+            raise ValueError(f"cost_mode={cost_mode} requires '{values_key}' in data.batch")
+        values = data.batch[values_key].float()
+        logger.info(f"[DEBUG] [{mode_str}] values: shape={values.shape}, mean={values.mean().item():.6f}, sum={values.sum().item():.6f}")
+        data.batch[values_key] = values * response_mask
         advantages, returns = compute_gae_advantage_return(
             token_level_rewards=token_level_rewards, values=values, gamma=gamma, lambd=lambd
         )
+        logger.info(f"[DEBUG] [{mode_str}] GAE计算完成，耗时: {time.time() - gae_start:.3f}秒")
     elif adv_estimator in ["reinforce", "grpo", "gigpo", "step_reinforce"]:
         advantages, returns = compute_reinforce_return(
             token_level_rewards=token_level_rewards, gamma=gamma, lambd=lambd
@@ -743,29 +873,46 @@ def compute_advantage(
     else:
         raise NotImplementedError
 
-    data.batch["raw_advantages"] = advantages
+    logger.info(f"[DEBUG] [{mode_str}] advantages原始: shape={advantages.shape}, mean={advantages.mean().item():.6f}, sum={advantages.sum().item():.6f}")
+    logger.info(f"[DEBUG] [{mode_str}] returns: shape={returns.shape}, mean={returns.mean().item():.6f}, sum={returns.sum().item():.6f}")
+
+    data.batch[raw_advantages_key] = advantages
     if whiten_advantages:
+        logger.info(f"[DEBUG] [{mode_str}] 执行whiten_advantages...")
+        whiten_adv_start = time.time()
         # TODO whiten过程中是否要考虑response的长度？
         advantages = masked_whiten(values=advantages, mask=response_mask)
+        logger.info(f"[DEBUG] [{mode_str}] whiten_advantages完成，耗时: {time.time() - whiten_adv_start:.3f}秒")
     advantages = advantages * response_mask
 
     if advantage_clip is not None:
+        logger.info(f"[DEBUG] [{mode_str}] 执行advantage clipping (clip={advantage_clip})...")
+        clip_start = time.time()
         adv_clip_frac = compute_clip_fraction(values=advantages, clip_min=-advantage_clip, clip_max=advantage_clip)
-        data.meta_info["metrics"] = {"critic/advantage_clip_frac": adv_clip_frac}
+        metric_key = f"critic/{'cost_' if cost_mode else ''}advantage_clip_frac"
+        data.meta_info["metrics"] = {metric_key: adv_clip_frac}
         advantages = torch.clamp(advantages, min=-advantage_clip, max=advantage_clip)
+        logger.info(f"[DEBUG] [{mode_str}] advantage clipping完成，clip_frac={adv_clip_frac:.6f}，耗时: {time.time() - clip_start:.3f}秒")
 
-    data.batch["advantages"] = advantages
-    data.batch["returns"] = returns
+    data.batch[advantages_key] = advantages
+    data.batch[returns_key] = returns
+    
+    total_time = time.time() - start_time
+    logger.info(f"[DEBUG] [{mode_str}] token_level处理总耗时: {time.time() - process_start:.3f}秒")
+    
     try:
         # log short summary for debugging
         resp_mask_sum = int(response_mask.sum().item())
+        prefix = "compute_cost_advantage" if cost_mode else "compute_advantage"
         logger.info(
-            f"compute_advantage: token_reward_mean={token_level_rewards.mean().item():.6f}, "
+            f"{prefix}: token_reward_mean={token_level_rewards.mean().item():.6f}, "
             f"advantages_mean={advantages.mean().item():.6f}, returns_mean={returns.mean().item():.6f}, "
             f"resp_mask_sum={resp_mask_sum}, adv_sum={advantages.sum().item():.6f}"
         )
-    except Exception:
-        pass
+        logger.info(f"[DEBUG] [{mode_str}] compute_advantage 总耗时: {total_time:.3f}秒")
+    except Exception as e:
+        logger.warning(f"[DEBUG] [{mode_str}] 日志记录失败: {e}")
+    
     return data
 
 

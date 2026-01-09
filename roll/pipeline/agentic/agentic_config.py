@@ -98,6 +98,40 @@ class AgenticConfig(PPOConfig):
     step_reward_weight: float = field(default=1.0, metadata={"help": "Step reward weight, used in GiGPO."})
     step_reward_gamma: float = field(default=0.95, metadata={"help": "Gamma parameter for step reward calculation"})
 
+    # Cost constraint related configurations (for Safe PPO with Lagrange multiplier)
+    enable_cost_constraint: bool = field(
+        default=False, 
+        metadata={"help": "Enable cost constraint training (Safe PPO). If True, use Lagrange multiplier to balance reward and cost."}
+    )
+    cost_critic: Optional[WorkerConfig] = field(
+        default=None,
+        metadata={"help": "Cost Critic worker configuration. Required when enable_cost_constraint=True."}
+    )
+    cost_limit: float = field(
+        default=2.0,
+        metadata={"help": "Cost constraint threshold. Episode cost should be below this value."}
+    )
+    lambda_init: float = field(
+        default=1.0,
+        metadata={"help": "Initial value for Lagrange multiplier λ. The actual λ = exp(log_lambda), so lambda_init=1.0 means log_lambda=0.0"}
+    )
+    lambda_max: float = field(
+        default=10.0,
+        metadata={"help": "Maximum value for Lagrange multiplier λ. Used to prevent λ from growing too large."}
+    )
+    lambda_lr: float = field(
+        default=1e-3,
+        metadata={"help": "Learning rate for updating Lagrange multiplier λ. Typically smaller than actor/critic learning rates."}
+    )
+    lambda_update_delay_steps: int = field(
+        default=0,
+        metadata={"help": "Number of steps to wait before starting to update λ. Allows critic to warm up first."}
+    )
+    episode_cost_window_size: int = field(
+        default=100,
+        metadata={"help": "Window size for computing moving average of episode costs. Used for stable λ updates."}
+    )
+
     def __post_init__(self):
         super().__post_init__()
 
@@ -110,6 +144,21 @@ class AgenticConfig(PPOConfig):
             self.reference.worker_cls = "roll.pipeline.base_worker.ActorWorker"
         if self.critic.worker_cls is None:
             self.critic.worker_cls = "roll.pipeline.base_worker.CriticWorker"
+        
+        # Cost constraint related initialization
+        if self.enable_cost_constraint:
+            if self.cost_critic is None:
+                raise ValueError(
+                    "cost_critic must be configured when enable_cost_constraint=True. "
+                    "Please provide a WorkerConfig for cost_critic."
+                )
+            if self.cost_critic.worker_cls is None:
+                self.cost_critic.worker_cls = "roll.pipeline.base_worker.CriticWorker"
+            logger.info(
+                f"Cost constraint enabled: cost_limit={self.cost_limit}, "
+                f"lambda_init={self.lambda_init}, lambda_max={self.lambda_max}, "
+                f"lambda_lr={self.lambda_lr}"
+            )
 
         self.train_env_manager.name = "train_env"
         self.val_env_manager.name = "val_env"

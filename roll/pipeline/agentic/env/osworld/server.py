@@ -273,7 +273,8 @@ class OSWorldServer:
             #   最终 actor_infer 出现 "Processed prompts: 0it"。
             'require_a11y_tree': (observation_type in ["a11y_tree", "screenshot_a11y_tree", "som", "terminal"]),
             'require_terminal': (observation_type == "terminal"),
-            'use_gpt_eval': False,  # Disable GPT eval, use rule-based and pytest instead
+            # NOTE: 当前版本 DesktopEnv 不支持 use_gpt_eval 参数，这里先不传入该参数，
+            # 仅依赖 rule-based 与 pytest 评估，避免 TypeError。
         }
         if snapshot_name is not None:
             desktop_kwargs['snapshot_name'] = snapshot_name
@@ -284,7 +285,7 @@ class OSWorldServer:
 
         try:
             self.env = DesktopEnv(**desktop_kwargs)
-            logger.info(f"DesktopEnv initialized successfully with use_gpt_eval={self.use_gpt_eval}")
+            logger.info("DesktopEnv initialized successfully")
         except TimeoutError as e:
             logger.error(f"VNC connection timeout: {e}")
             logger.error("This usually means the remote VNC server is not accessible.")

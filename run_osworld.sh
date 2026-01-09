@@ -14,7 +14,7 @@
 # export LLM_JUDGE_MODEL="gpt-4o" 
 # export OPENAI_API_KEY=sk-UvQ4LjDbNt1FQKhJolXPZ9VTGtMPMfx0lXjetCtdjFmHKleZ
 # export OPENAI_BASE_URL=https://api3.xhub.chat/v1
-# OSWORLD_CONFIG_NAME=agent_val_osworld_2vm_linux bash run_osworld.sh
+# OSWORLD_CONFIG_NAME=agent_val_osworld_safePPO bash run_osworld.sh
 
 # # 查看 response_level 计算
 # grep "Response Level Reward Calculation" /data/share/projects/quanshu/ROLL/output/logs/agentic_pipeline_osworld_vnc-*/terminal_output.log

@@ -1,6 +1,7 @@
 import json
 import os.path
 import random
+from collections import deque
 from typing import Any, Dict, List
 
 import numpy as np
@@ -76,6 +77,23 @@ class AgenticPipeline(BasePipeline):
                 worker_config=self.pipeline_config.critic,
             )
             download_clusters.append(self.critic)
+        
+        # 新增：Cost Critic Cluster (for Safe PPO with cost constraint)
+        if self.pipeline_config.enable_cost_constraint:
+            if self.pipeline_config.adv_estimator != "gae":
+                raise ValueError(
+                    "enable_cost_constraint requires adv_estimator='gae'. "
+                    "Cost critic needs GAE to compute cost advantages."
+                )
+            self.cost_critic: Any = Cluster(
+                name=self.pipeline_config.cost_critic.name,
+                worker_cls=self.pipeline_config.cost_critic.worker_cls,
+                resource_manager=self.resource_manager,
+                worker_config=self.pipeline_config.cost_critic,
+            )
+            download_clusters.append(self.cost_critic)
+            logger.info(f"Cost Critic Cluster initialized: {self.cost_critic.cluster_name}")
+        
         self.download_models(*download_clusters)
         self.tokenizer = default_tokenizer_provider(model_args=self.pipeline_config.actor_train.model_args)
 
@@ -106,6 +124,11 @@ class AgenticPipeline(BasePipeline):
         refs.extend(self.actor_train.initialize(pipeline_config=self.pipeline_config, blocking=False))
         if self.pipeline_config.adv_estimator == "gae":
             refs.extend(self.critic.initialize(pipeline_config=self.pipeline_config, blocking=False))
+        
+        # 新增：初始化Cost Critic
+        if self.pipeline_config.enable_cost_constraint:
+            refs.extend(self.cost_critic.initialize(pipeline_config=self.pipeline_config, blocking=False))
+        
         ray.get(refs)
 
         self.actor_infer.initialize(pipeline_config=self.pipeline_config, blocking=True)
@@ -118,9 +141,55 @@ class AgenticPipeline(BasePipeline):
         )
 
         if self.pipeline_config.adv_estimator == "gae":
-            self.set_checkpoint_clusters(self.actor_train, self.critic)
+            checkpoint_clusters = [self.actor_train, self.critic]
+            # 新增：Cost Critic也需要checkpoint
+            if self.pipeline_config.enable_cost_constraint:
+                checkpoint_clusters.append(self.cost_critic)
+            self.set_checkpoint_clusters(*checkpoint_clusters)
         else:
             self.set_checkpoint_clusters(self.actor_train)
+
+        # 新增：Lagrange乘子初始化（仅在主进程）
+        if self.pipeline_config.enable_cost_constraint:
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            self.log_lambda = torch.nn.Parameter(
+                torch.tensor(
+                    np.log(self.pipeline_config.lambda_init),
+                    device=device,
+                    dtype=torch.float32
+                ),
+                requires_grad=True,
+            )
+            self.log_lambda_max = np.log(self.pipeline_config.lambda_max) if self.pipeline_config.lambda_max else None
+            self.log_lambda_optimizer = torch.optim.SGD(
+                [self.log_lambda],
+                lr=self.pipeline_config.lambda_lr
+            )
+            
+            # 早期验证：在初始化时测试lambda更新逻辑，提前发现问题
+            if self.pipeline_config.enable_cost_constraint:
+                logger.info(f"[DEBUG] Lambda优化器初始化完成，将在step {self.pipeline_config.lambda_update_delay_steps}开始更新")
+                # 测试lambda loss计算是否正常
+                try:
+                    test_cost_mean = 1.0
+                    test_cost_diff = torch.tensor(
+                        test_cost_mean - self.pipeline_config.cost_limit,
+                        dtype=torch.float32,
+                        device=self.log_lambda.device,
+                        requires_grad=False
+                    )
+                    test_lambda_loss = -test_cost_diff * torch.exp(self.log_lambda)
+                    logger.info(f"[DEBUG] Lambda loss计算测试通过: loss={test_lambda_loss.item():.4f}")
+                except Exception as e:
+                    logger.error(f"[DEBUG] Lambda loss计算测试失败: {e}")
+                    raise
+            self.episode_costs = deque(
+                maxlen=self.pipeline_config.episode_cost_window_size
+            )
+            logger.info(
+                f"Lagrange multiplier initialized: log_lambda={self.log_lambda.item():.4f}, "
+                f"lambda={torch.exp(self.log_lambda).item():.4f}"
+            )
 
         self.running = RunningMoments()
 
@@ -128,16 +197,27 @@ class AgenticPipeline(BasePipeline):
     def run(self):
         # Calculate tokens-per-second system throughput
         tps_timer = _Timer(window_size=5)
+        import time
+        total_start_time = time.time()
 
         for global_step in range(self.pipeline_config.max_steps):
             if global_step <= self.state.step:
                 global_step += 1
                 continue
+            
+            step_start_time = time.time()
+            logger.info(f"\n{'='*80}")
+            logger.info(f"[DEBUG] ========== Training Step {global_step}/{self.pipeline_config.max_steps} 开始 ==========")
+            logger.info(f"[DEBUG] 总运行时间: {time.time() - total_start_time:.2f}秒")
+            logger.info(f"{'='*80}\n")
             logger.info(f"pipeline rollout global step {global_step} start...")
             metrics = {}
             with tps_timer:
                 if self.pipeline_config.adv_estimator == "gae":
                     self.critic.offload_states(blocking=True)
+                    # 新增：Cost Critic也需要offload states
+                    if self.pipeline_config.enable_cost_constraint:
+                        self.cost_critic.offload_states(blocking=True)
                 self.actor_train.offload_states(blocking=True)
 
                 ray.get(self.train_rollout_scheduler.suspend.remote())
@@ -157,8 +237,11 @@ class AgenticPipeline(BasePipeline):
                     metrics.update(self.val(global_step=global_step))
 
                 with Timer(name="rollout", logger=None) as rollout_timer:
+                    logger.info(f"[DEBUG] [Step {global_step}] 开始rollout阶段...")
                     batch.meta_info["is_offload_states"] = True
+                    logger.info(f"[DEBUG] [Step {global_step}] 调用rollout_scheduler.get_batch (batch_size={self.pipeline_config.rollout_batch_size})...")
                     batch = ray.get(self.train_rollout_scheduler.get_batch.remote(batch, self.pipeline_config.rollout_batch_size))
+                    logger.info(f"[DEBUG] [Step {global_step}] rollout完成，batch形状: {batch.batch.batch_size if hasattr(batch.batch, 'batch_size') else 'N/A'}")
                     dump_rollout_trajectories(self.pipeline_config.rollout_dump_dir, global_step, batch)
 
                 metrics["time/rollout"] = rollout_timer.last
@@ -176,9 +259,13 @@ class AgenticPipeline(BasePipeline):
                     ref_log_probs_refs: List[ray.ObjectRef] = self.reference.compute_log_probs(batch, blocking=False)
                     ref_log_probs = DataProto.materialize_concat(data_refs=ref_log_probs_refs)
                     ref_log_probs.rename(old_keys="log_probs", new_keys="ref_log_probs")
+                    # 先处理metrics，避免union时冲突
+                    ref_log_probs_metrics = ref_log_probs.meta_info.pop("metrics", {})
+                    batch_metrics = batch.meta_info.pop("metrics", {})
                     batch = batch.union(ref_log_probs)
                     avg_ref_log_prob = masked_mean(batch.batch["ref_log_probs"], batch.batch["response_mask"][:, 1:])
-                    metrics.update(reduce_metrics(ref_log_probs.meta_info.pop("metrics", {})))
+                    metrics.update(reduce_metrics(batch_metrics))
+                    metrics.update(reduce_metrics(ref_log_probs_metrics))
                     metrics.update({"critic/ref_log_prob/mean": avg_ref_log_prob.item()})
                 metrics["time/ref_log_probs_values_reward"] = cal_timer.last
 
@@ -188,11 +275,31 @@ class AgenticPipeline(BasePipeline):
                     old_log_probs_refs: List[ray.ObjectRef] = self.actor_train.compute_log_probs(batch, blocking=False)
                     if self.pipeline_config.adv_estimator == "gae":
                         values_refs: List[ray.ObjectRef] = self.critic.compute_values(batch, blocking=False)
+                        # 新增：计算Cost Critic的values（用于Cost advantage计算）
+                        if self.pipeline_config.enable_cost_constraint:
+                            cost_values_refs: List[ray.ObjectRef] = self.cost_critic.compute_values(batch, blocking=False)
                     old_log_probs = DataProto.materialize_concat(data_refs=old_log_probs_refs)
                     if self.pipeline_config.adv_estimator == "gae":
                         values = DataProto.materialize_concat(data_refs=values_refs)
+                        # 先处理metrics，避免union时冲突
+                        values_metrics = values.meta_info.pop("metrics", {})
+                        batch_metrics = batch.meta_info.pop("metrics", {})
                         batch = batch.union(values)
-                        metrics.update(reduce_metrics(values.meta_info.pop("metrics", {})))
+                        metrics.update(reduce_metrics(batch_metrics))
+                        metrics.update(reduce_metrics(values_metrics))
+                        # 新增：收集Cost Critic的values并添加到batch
+                        if self.pipeline_config.enable_cost_constraint:
+                            cost_values = DataProto.materialize_concat(data_refs=cost_values_refs)
+                            # 使用不同的key来存储cost values，避免与reward values混淆
+                            cost_values.rename(old_keys="values", new_keys="cost_values")
+                            # 先处理metrics，避免union时冲突
+                            cost_values_metrics = cost_values.meta_info.pop("metrics", {})
+                            batch_metrics = batch.meta_info.pop("metrics", {})
+                            batch = batch.union(cost_values)
+                            # 保存旧的cost_values用于PPO clipping
+                            batch.batch["old_cost_values"] = batch.batch["cost_values"].clone()
+                            metrics.update(reduce_metrics(batch_metrics))
+                            metrics.update(reduce_metrics(cost_values_metrics))
                     batch.batch["old_log_probs"] = old_log_probs.batch["log_probs"]
                     avg_old_log_prob = masked_mean(batch.batch["old_log_probs"], batch.batch["response_mask"][:, 1:])
                     metrics.update({"critic/old_log_prob/mean": avg_old_log_prob.item()})
@@ -244,6 +351,8 @@ class AgenticPipeline(BasePipeline):
                     batch, kl_metrics = apply_kl_penalty(data=batch, kl_ctrl=self.kl_ctrl, kl_penalty=self.pipeline_config.kl_penalty)
 
                     # Is the advantage calculated globally across the batch, or within each group?
+                    # 计算Reward侧的advantage（原有逻辑）
+                    logger.info(f"[DEBUG] [Step {global_step}] 开始计算Reward侧的advantage...")
                     batch = compute_advantage(
                         data=batch,
                         gamma=self.pipeline_config.gamma,
@@ -252,14 +361,156 @@ class AgenticPipeline(BasePipeline):
                         advantage_clip=self.pipeline_config.advantage_clip,
                         whiten_advantages=self.pipeline_config.whiten_advantages,
                         whiten_rewards=self.pipeline_config.whiten_rewards,
+                        cost_mode=False,  # Reward模式
                     )
                     metrics.update(reduce_metrics(batch.meta_info.pop("metrics", {})))
+                    logger.info(f"[DEBUG] [Step {global_step}] Reward侧advantage计算完成")
+                    
+                    # 新增：计算Cost侧的advantage（仅当启用cost约束时）
+                    if self.pipeline_config.enable_cost_constraint:
+                        logger.info(f"[DEBUG] [Step {global_step}] 开始计算Cost侧的advantage...")
+                        batch = compute_advantage(
+                            data=batch,
+                            gamma=self.pipeline_config.gamma,
+                            lambd=self.pipeline_config.lambd,
+                            adv_estimator=self.pipeline_config.adv_estimator,
+                            advantage_clip=self.pipeline_config.advantage_clip,
+                            whiten_advantages=self.pipeline_config.whiten_advantages,
+                            whiten_rewards=self.pipeline_config.whiten_rewards,
+                            cost_mode=True,  # Cost模式
+                        )
+                        metrics.update(reduce_metrics(batch.meta_info.pop("metrics", {})))
+                        logger.info(f"[DEBUG] [Step {global_step}] Cost侧advantage计算完成")
 
                 metrics.update(kl_metrics)
                 metrics["time/adv"] = timer.last
 
+                # Lambda更新逻辑（在critic训练之前，以便lambda可用于后续的actor训练）
+                if self.pipeline_config.enable_cost_constraint:
+                    # 收集episode costs并更新lambda
+                    if "episode_costs" in batch.non_tensor_batch:
+                        episode_costs = batch.non_tensor_batch["episode_costs"]
+                        # 转换为numpy array并计算平均值
+                        if isinstance(episode_costs, torch.Tensor):
+                            avg_cost = episode_costs.mean().item()
+                        else:
+                            # 处理numpy array或list
+                            costs_flat = []
+                            for cost in episode_costs:
+                                if isinstance(cost, (list, np.ndarray)):
+                                    costs_flat.extend(cost if isinstance(cost, list) else cost.tolist())
+                                else:
+                                    costs_flat.append(float(cost))
+                            avg_cost = np.mean(costs_flat) if costs_flat else 0.0
+                        
+                        self.episode_costs.append(avg_cost)
+                        
+                        # 计算移动平均
+                        if len(self.episode_costs) > 0:
+                            episode_cost_mean = np.mean(list(self.episode_costs))
+                            
+                            # 更新lambda（仅在达到延迟步数后）
+                            if global_step >= self.pipeline_config.lambda_update_delay_steps:
+                                try:
+                                    # 【关键修复】整个run方法被@torch.no_grad()装饰，需要使用torch.enable_grad()临时启用梯度追踪
+                                    with torch.enable_grad():
+                                        # 确保self.log_lambda需要梯度
+                                        if not self.log_lambda.requires_grad:
+                                            logger.warning(f"[DEBUG] [Step {global_step}] log_lambda不需要梯度，强制设置requires_grad=True")
+                                            self.log_lambda.requires_grad_(True)
+                                        
+                                        # 验证log_lambda的状态
+                                        exp_log_lambda = torch.exp(self.log_lambda)
+                                        if not exp_log_lambda.requires_grad:
+                                            logger.error(f"[DEBUG] [Step {global_step}] torch.exp(log_lambda)不需要梯度！")
+                                            logger.error(f"[DEBUG] [Step {global_step}] log_lambda.requires_grad={self.log_lambda.requires_grad}")
+                                            logger.error(f"[DEBUG] [Step {global_step}] log_lambda.is_leaf={self.log_lambda.is_leaf}")
+                                            logger.error(f"[DEBUG] [Step {global_step}] log_lambda.grad_fn={self.log_lambda.grad_fn}")
+                                            logger.error(f"[DEBUG] [Step {global_step}] 是否在torch.enable_grad()上下文中: {torch.is_grad_enabled()}")
+                                            raise RuntimeError(f"[Step {global_step}] torch.exp(log_lambda)不需要梯度，无法计算lambda_loss")
+                                        
+                                        # 计算cost_diff（Python float，不会影响梯度计算）
+                                        cost_diff_value = float(episode_cost_mean - self.pipeline_config.cost_limit)
+                                        
+                                        # 直接使用self.log_lambda计算lambda_loss，确保计算图正确
+                                        # cost_diff_value是Python float，不会影响梯度计算
+                                        lambda_loss = -cost_diff_value * exp_log_lambda
+                                        
+                                        # 验证lambda_loss是否需要梯度
+                                        if not lambda_loss.requires_grad:
+                                            logger.error(f"[DEBUG] [Step {global_step}] lambda_loss不需要梯度！")
+                                            logger.error(f"[DEBUG] [Step {global_step}] log_lambda.requires_grad={self.log_lambda.requires_grad}")
+                                            logger.error(f"[DEBUG] [Step {global_step}] log_lambda.is_leaf={self.log_lambda.is_leaf}")
+                                            logger.error(f"[DEBUG] [Step {global_step}] log_lambda.grad_fn={self.log_lambda.grad_fn}")
+                                            logger.error(f"[DEBUG] [Step {global_step}] cost_diff_value={cost_diff_value}")
+                                            logger.error(f"[DEBUG] [Step {global_step}] torch.exp(self.log_lambda).requires_grad={torch.exp(self.log_lambda).requires_grad}")
+                                            logger.error(f"[DEBUG] [Step {global_step}] 是否在torch.enable_grad()上下文中: {torch.is_grad_enabled()}")
+                                            raise RuntimeError(f"[Step {global_step}] lambda_loss不需要梯度，无法进行反向传播")
+                                        
+                                        self.log_lambda_optimizer.zero_grad()
+                                        lambda_loss.backward()
+                                        
+                                        # 检查梯度是否存在
+                                        if self.log_lambda.grad is None:
+                                            logger.error(f"[DEBUG] [Step {global_step}] log_lambda的梯度为None")
+                                            logger.error(f"[DEBUG] [Step {global_step}] lambda_loss.requires_grad={lambda_loss.requires_grad}")
+                                            logger.error(f"[DEBUG] [Step {global_step}] 是否在torch.enable_grad()上下文中: {torch.is_grad_enabled()}")
+                                            raise RuntimeError(f"[Step {global_step}] log_lambda的梯度为None，无法更新")
+                                        
+                                        self.log_lambda_optimizer.step()
+                                        
+                                        logger.info(f"[DEBUG] [Step {global_step}] Lambda更新成功: log_lambda={self.log_lambda.item():.6f}, grad={self.log_lambda.grad.item() if self.log_lambda.grad is not None else None}")
+                                except Exception as e:
+                                    logger.error(f"[Step {global_step}] Lambda更新失败: {e}")
+                                    logger.error(f"[Step {global_step}] episode_cost_mean={episode_cost_mean}, cost_limit={self.pipeline_config.cost_limit}")
+                                    logger.error(f"[Step {global_step}] log_lambda.requires_grad={self.log_lambda.requires_grad}")
+                                    logger.error(f"[Step {global_step}] log_lambda.device={self.log_lambda.device}")
+                                    logger.error(f"[Step {global_step}] 是否在torch.enable_grad()上下文中: {torch.is_grad_enabled()}")
+                                    raise
+                                
+                                # Clamp lambda到最大值
+                                if self.log_lambda_max is not None:
+                                    with torch.no_grad():
+                                        self.log_lambda.clamp_(max=self.log_lambda_max)
+                                
+                                metrics["train/lambda"] = torch.exp(self.log_lambda).item()
+                                metrics["train/episode_cost"] = episode_cost_mean
+                                metrics["train/episode_cost_current"] = avg_cost
+                                logger.info(
+                                    f"[Step {global_step}] Lambda updated: λ={torch.exp(self.log_lambda).item():.4f}, "
+                                    f"episode_cost_mean={episode_cost_mean:.4f}, cost_limit={self.pipeline_config.cost_limit}"
+                                )
+                            
+                            # 将lambda传递到batch中，供worker使用
+                            batch.meta_info["log_lambda"] = self.log_lambda.detach().cpu().item()
+                
                 if self.pipeline_config.adv_estimator == "gae":
+                    logger.info(f"[DEBUG] [Step {global_step}] 开始训练Critic模型...")
+                    # 先训练critic，使用blocking=False保持异步，但立即等待结果
                     critic_train_metrics_refs: List[ray.ObjectRef] = self.critic.train_step(batch, blocking=False)
+                    # 等待critic训练完成
+                    critic_train_metrics = DataProto.materialize_concat(data_refs=critic_train_metrics_refs)
+                    logger.info(f"[DEBUG] [Step {global_step}] Critic模型训练完成，开始offload...")
+                    # 训练完成后立即offload以释放GPU内存
+                    self.critic.offload_states(blocking=True)
+                    # 清理GPU缓存以确保内存释放
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    logger.info(f"[DEBUG] [Step {global_step}] Critic模型已offload，GPU缓存已清理")
+                    
+                    # 新增：Cost Critic训练（在critic offload之后）
+                    if self.pipeline_config.enable_cost_constraint:
+                        logger.info(f"[DEBUG] [Step {global_step}] 开始训练Cost Critic模型...")
+                        cost_critic_train_metrics_refs: List[ray.ObjectRef] = self.cost_critic.train_step(batch, blocking=False)
+                        # 等待cost_critic训练完成
+                        cost_critic_train_metrics = DataProto.materialize_concat(data_refs=cost_critic_train_metrics_refs)
+                        logger.info(f"[DEBUG] [Step {global_step}] Cost Critic模型训练完成，开始offload...")
+                        # 训练完成后立即offload以释放GPU内存
+                        self.cost_critic.offload_states(blocking=True)
+                        # 清理GPU缓存
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                        logger.info(f"[DEBUG] [Step {global_step}] Cost Critic模型已offload，GPU缓存已清理")
 
                 # implement critic warmup
                 if self.pipeline_config.critic_warmup <= global_step:
@@ -285,14 +536,30 @@ class AgenticPipeline(BasePipeline):
                             logger.exception("failed to write actor batch debug file")
 
                     logger.info(f"[Training Step {global_step}] Updating Actor Model (PPO training)...")
+                    # Actor训练使用blocking=False保持异步，但立即等待结果
                     actor_train_metrics_refs = self.actor_train.train_step(batch, blocking=False)
+                    # 等待actor训练完成
                     actor_train_metrics: DataProto = DataProto.materialize_concat(data_refs=actor_train_metrics_refs)
                     metrics.update(reduce_metrics(actor_train_metrics.meta_info.pop("metrics", {})))
                     logger.info(f"[Training Step {global_step}] Actor Model Updated Successfully")
+                    logger.info(f"[DEBUG] [Step {global_step}] Actor模型训练完成，开始offload...")
+                    # Actor训练完成后也offload
+                    self.actor_train.offload_states(blocking=True)
+                    # 清理GPU缓存
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    logger.info(f"[DEBUG] [Step {global_step}] Actor模型已offload，GPU缓存已清理")
 
                 if self.pipeline_config.adv_estimator == "gae":
-                    critic_train_metrics = DataProto.materialize_concat(data_refs=critic_train_metrics_refs)
+                    # critic_train_metrics已经在训练时materialize了，直接使用
                     metrics.update(reduce_metrics(critic_train_metrics.meta_info.pop("metrics", {})))
+                    # 新增：收集Cost Critic训练metrics
+                    if self.pipeline_config.enable_cost_constraint:
+                        # cost_critic_train_metrics已经在训练时materialize了，直接使用
+                        # 重命名metrics以避免与reward critic混淆
+                        cost_metrics = cost_critic_train_metrics.meta_info.pop("metrics", {})
+                        cost_metrics_renamed = {f"cost_critic/{k}": v for k, v in cost_metrics.items()}
+                        metrics.update(reduce_metrics(cost_metrics_renamed))
                 tps_timer.push_units_processed(n=torch.sum(batch.batch["attention_mask"]).detach().item())
 
             data_metrics = compute_data_metrics(batch=batch)
@@ -307,6 +574,19 @@ class AgenticPipeline(BasePipeline):
             self.do_checkpoint(global_step=global_step)
 
             self.tracker.log(values=metrics, step=global_step)
+
+            step_time = time.time() - step_start_time
+            logger.info(f"\n{'='*80}")
+            logger.info(f"[DEBUG] ========== Training Step {global_step}/{self.pipeline_config.max_steps} 完成 ==========")
+            logger.info(f"[DEBUG] 本步骤耗时: {step_time:.2f}秒 ({step_time/60:.2f}分钟)")
+            logger.info(f"[DEBUG] 总运行时间: {time.time() - total_start_time:.2f}秒 ({(time.time() - total_start_time)/60:.2f}分钟)")
+            if global_step < self.pipeline_config.max_steps - 1:
+                remaining_steps = self.pipeline_config.max_steps - global_step - 1
+                avg_time_per_step = (time.time() - total_start_time) / (global_step + 1)
+                estimated_remaining = avg_time_per_step * remaining_steps
+                logger.info(f"[DEBUG] 预计剩余时间: {estimated_remaining:.2f}秒 ({estimated_remaining/60:.2f}分钟)")
+            logger.info(f"[DEBUG] 关键指标: rollout={metrics.get('time/rollout', 'N/A')}, adv={metrics.get('time/adv', 'N/A')}")
+            logger.info(f"{'='*80}\n")
 
             if global_step % self.pipeline_config.logging_steps == 0:
                 if int(os.environ.get("RAY_PROFILING", "0")):

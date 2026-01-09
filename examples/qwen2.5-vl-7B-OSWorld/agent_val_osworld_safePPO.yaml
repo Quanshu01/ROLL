@@ -12,7 +12,8 @@ hydra:
     dir: .
   output_subdir: null
 
-exp_name: "agentic_pipeline_osworld"
+# ============ Safe PPO 实验名称 ============
+exp_name: "safe_ppo_osworld"
 seed: 42
 logging_dir: ./output/logs
 output_dir: ./output
@@ -51,11 +52,36 @@ sequence_length: 4096
 
 advantage_clip: 0.2
 ppo_epochs: 1
-adv_estimator: "grpo"
+# ============ 关键修改：必须使用 GAE 才能启用 Cost Constraint ============
+adv_estimator: "gae"
 init_kl_coef: 0.0
 whiten_advantages: false
 entropy_loss_coef: 0
 max_grad_norm: 1.0
+
+# ============ Safe PPO / Cost Constraint 配置 ============
+# 启用 cost 约束训练（Safe PPO with Lagrange multiplier）
+enable_cost_constraint: true
+
+# Cost 约束阈值：episode cost 应低于此值
+# 如果平均 episode cost > cost_limit，lambda 会增大，更多惩罚 cost
+# 如果平均 episode cost < cost_limit，lambda 会减小，更多关注 reward
+cost_limit: 2.0
+
+# Lagrange 乘子初始值（实际 λ = exp(log_lambda)）
+lambda_init: 1.0
+
+# Lagrange 乘子最大值（防止 λ 过大导致完全忽略 reward）
+lambda_max: 10.0
+
+# Lagrange 乘子学习率（通常比 actor/critic 学习率小）
+lambda_lr: 1e-3
+
+# 延迟更新 lambda 的步数（让 critic 先 warm up）
+lambda_update_delay_steps: 1
+
+# 计算 episode cost 移动平均的窗口大小
+episode_cost_window_size: 100
 
 # pretrain: /data/share/projects/quanshu/models/mPLUG/GUI-Owl-7B
 # reward_pretrain: /data/share/projects/quanshu/models/mPLUG/GUI-Owl-7B
@@ -128,6 +154,57 @@ reference:
   world_size: 1
   infer_batch_size: 1
 
+# ============ Reward Critic 配置（GAE 模式必需）============
+critic:
+  name: reward_critic
+  model_args:
+    model_name_or_path: ${reward_pretrain}  # 使用与actor相同的预训练模型
+    attn_implementation: sdpa
+    disable_gradient_checkpointing: false
+    dtype: bf16
+    model_type: trl  # 使用 TRL 的 ValueHead 架构
+  training_args:
+    learning_rate: 1.0e-5
+    weight_decay: 0
+    per_device_train_batch_size: 1
+    gradient_accumulation_steps: 1
+    warmup_steps: 0
+    lr_scheduler_type: cosine
+  data_args:
+    template: qwen2_5
+  strategy_args:
+    strategy_name: deepspeed_train
+    strategy_config: ${deepspeed_zero3_cpuoffload}
+  device_mapping: "[0,1]"  # 与 actor_train 共享 GPU
+  world_size: 1
+  infer_batch_size: 1
+
+# ============ Cost Critic 配置（Safe PPO 必需）============
+# Cost Critic 用于估计 cost 值函数 V^c(s)，预测未来累积 cost
+cost_critic:
+  name: cost_critic
+  model_args:
+    model_name_or_path: ${reward_pretrain}  # 使用与actor相同的预训练模型
+    attn_implementation: sdpa
+    disable_gradient_checkpointing: false
+    dtype: bf16
+    model_type: trl  # 使用 TRL 的 ValueHead 架构
+  training_args:
+    learning_rate: 1.0e-5
+    weight_decay: 0
+    per_device_train_batch_size: 1
+    gradient_accumulation_steps: 1
+    warmup_steps: 0
+    lr_scheduler_type: cosine
+  data_args:
+    template: qwen2_5
+  strategy_args:
+    strategy_name: deepspeed_train
+    strategy_config: ${deepspeed_zero3_cpuoffload}
+  device_mapping: "[0,1]"  # 与 actor_train 和 reward_critic 共享 GPU
+  world_size: 1
+  infer_batch_size: 1
+
 reward_normalization:
   grouping: traj_group_id
   # method: mean_std
@@ -165,7 +242,8 @@ custom_envs:
       observation_type: terminal
       action_space: pyautogui
       headless: true
-      task_config_path: evaluation_examples/test_genearl_harm.json
+      task_config_path: evaluation_examples/test_genearl_harm_mini.json
+      # task_config_path: evaluation_examples/test_genearl_harn.json
       format_penalty: ${osworld_format_penalty}
       server_log_dir: ${oc.env:HYDRA_RUN_DIR,./output/logs/osworld_fallback}
       path_to_vm: js1.blockelite.cn:26031:26088

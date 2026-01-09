@@ -261,12 +261,68 @@ class ActorWorker(Worker):
         loss func接口定义:
             data: DataProto, 由train_step透传
             output_tensor: torch.Tensor, model.forward()的输出Tensor
+        
+        新增：支持Cost约束的Safe PPO
+        - 如果enable_cost_constraint=True，使用组合advantage: (reward_adv - λ*cost_adv) / (1+λ)
+        - 否则使用原有的reward advantage
         """
 
         response_mask = data.batch["response_mask"][:, 1:].long()
         ref_log_probs = data.batch["ref_log_probs"]
         old_log_probs = data.batch["old_log_probs"]
-        advantages = data.batch["advantages"]
+        
+        # 新增：根据是否启用cost约束选择不同的advantage计算方式
+        if getattr(self.pipeline_config, "enable_cost_constraint", False):
+            # Safe PPO模式：使用组合advantage
+            reward_advantages = data.batch["advantages"]
+            
+            # 获取cost advantages（如果存在）
+            if "cost_advantages" not in data.batch:
+                raise ValueError(
+                    "enable_cost_constraint=True but 'cost_advantages' not found in batch. "
+                    "Please ensure cost advantage is computed before actor training."
+                )
+            cost_advantages = data.batch["cost_advantages"]
+            
+            # 获取lambda（从meta_info中传递）
+            log_lambda = data.meta_info.get("log_lambda", None)
+            if log_lambda is None:
+                # 如果没有传递，尝试从pipeline_config获取初始值
+                import numpy as np
+                log_lambda = np.log(getattr(self.pipeline_config, "lambda_init", 1.0))
+            
+            # 转换为tensor（如果需要）
+            if isinstance(log_lambda, (float, int)):
+                log_lambda = torch.tensor(log_lambda, dtype=torch.float32, device=reward_advantages.device)
+            elif isinstance(log_lambda, torch.Tensor):
+                log_lambda = log_lambda.to(reward_advantages.device)
+            else:
+                log_lambda = torch.tensor(np.log(1.0), dtype=torch.float32, device=reward_advantages.device)
+            
+            # 计算组合advantage（参考Safe-RLHF）
+            # Formula: combined_adv = (reward_adv - λ * cost_adv) / (1 + λ)
+            multiplier = torch.exp(log_lambda).item()
+            combined_advantages = (
+                reward_advantages - multiplier * cost_advantages
+            ) / (1.0 + multiplier)
+            
+            advantages = combined_advantages
+            
+            # 记录组合advantage的统计信息（用于调试）
+            if hasattr(self, "logger"):
+                try:
+                    self.logger.debug(
+                        f"Actor loss: using combined advantage, "
+                        f"λ={multiplier:.4f}, "
+                        f"reward_adv_mean={reward_advantages.mean().item():.4f}, "
+                        f"cost_adv_mean={cost_advantages.mean().item():.4f}, "
+                        f"combined_adv_mean={combined_advantages.mean().item():.4f}"
+                    )
+                except Exception:
+                    pass  # 避免日志记录失败影响训练
+        else:
+            # 原有逻辑：只使用reward advantages
+            advantages = data.batch["advantages"]
 
         log_probs = self.strategy.op_compute_log_probs(
             logits=output_tensor, input_ids=data.batch["input_ids"], attention_mask=data.batch["response_mask"]
@@ -491,13 +547,45 @@ class CriticWorker(Worker):
         loss func接口定义:
             data: DataProto, 由train_step透传
             output_tensor: torch.Tensor, model.forward()的输出Tensor
+        
+        新增：支持Cost Critic模式
+        - 如果cluster_name包含"cost"，使用cost相关的数据（cost_values, cost_returns等）
+        - 否则使用原有的reward相关数据
         """
         response_mask = data.batch["response_mask"][:, 1:]
-        old_values = data.batch["values"]
-        returns = data.batch["returns"]
+        
+        # 判断是否为Cost Critic（通过cluster name判断）
+        is_cost_critic = "cost" in self.cluster_name.lower() if hasattr(self, "cluster_name") else False
+        
+        if is_cost_critic:
+            # Cost Critic模式：使用cost相关的数据
+            if "cost_values" not in data.batch:
+                raise ValueError(
+                    f"Cost Critic ({self.cluster_name}) requires 'cost_values' in batch. "
+                    "Please ensure cost_values are computed before cost critic training."
+                )
+            if "cost_returns" not in data.batch:
+                raise ValueError(
+                    f"Cost Critic ({self.cluster_name}) requires 'cost_returns' in batch. "
+                    "Please ensure cost advantage is computed before cost critic training."
+                )
+            
+            old_values = data.batch.get("old_cost_values", data.batch["cost_values"])
+            returns = data.batch["cost_returns"]
+            values_key = "cost_values"  # 用于重命名
+        else:
+            # Reward Critic模式（原有逻辑）
+            old_values = data.batch["values"]
+            returns = data.batch["returns"]
+            values_key = "values"
 
         values, _ = self.forward_func_values(data=data, output_tensor=output_tensor)
 
+        # 对于Cost Critic，使用cost_values而不是values来存储
+        if is_cost_critic:
+            # 更新batch中的cost_values（用于后续迭代）
+            data.batch["cost_values"] = values
+        
         if self.pipeline_config.value_clip is not None:
             values_clipped = torch.clip(
                 values,
@@ -514,11 +602,14 @@ class CriticWorker(Worker):
 
         vf_loss = 0.5 * masked_mean(loss, response_mask, dim=-1).mean()
 
+        # 根据是否为Cost Critic选择不同的metrics key前缀
+        prefix = "cost_critic" if is_cost_critic else "critic"
+        
         vf_metrics = {
-            "critic/loss": vf_loss.detach().item(),
-            "critic/value": (masked_mean(old_values, response_mask, dim=-1)).mean().detach().item(),
-            "critic/vpred": (masked_mean(values, response_mask, dim=-1)).mean().detach().item(),
-            "critic/clipfrac": vf_clipfrac.detach().item(),
+            f"{prefix}/loss": vf_loss.detach().item(),
+            f"{prefix}/value": (masked_mean(old_values, response_mask, dim=-1)).mean().detach().item(),
+            f"{prefix}/vpred": (masked_mean(values, response_mask, dim=-1)).mean().detach().item(),
+            f"{prefix}/clipfrac": vf_clipfrac.detach().item(),
             "critic/error": masked_mean((values - returns) ** 2, response_mask, dim=-1).mean().detach().item(),
         }
 
