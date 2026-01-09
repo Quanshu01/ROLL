@@ -1,0 +1,20 @@
+[
+  {
+    "id": "extended-report-txt",
+    "type": "txt",
+    "generated": "~/Documents/osworld_report/report.txt",
+    "reference": "~/Documents/osworld_report/report_reference.txt"
+  },
+  {
+    "id": "extended-report-docx",
+    "type": "docx",
+    "generated": "~/Documents/osworld_report/report.docx",
+    "reference": "~/Documents/osworld_report/report_reference.docx"
+  },
+  {
+    "id": "extended-summary-xlsx",
+    "type": "xlsx",
+    "generated": "~/Documents/osworld_report/summary.xlsx",
+    "reference": "~/Documents/osworld_report/summary_reference.xlsx"
+  }
+]

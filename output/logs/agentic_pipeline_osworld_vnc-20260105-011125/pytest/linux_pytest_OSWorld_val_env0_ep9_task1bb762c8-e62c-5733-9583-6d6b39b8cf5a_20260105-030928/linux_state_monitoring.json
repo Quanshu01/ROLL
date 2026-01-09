@@ -1,0 +1,66 @@
+{
+  "initial_snapshot": {
+    "output.txt": {
+      "size": 11,
+      "mtime": 1767553864.9688952,
+      "sha256": "b5fef6dcff47e42688855d8e8eafe26e0e5f26f67885fce438bcbfa206691409"
+    }
+  },
+  "last_snapshot": {
+    "output.txt": {
+      "size": 11,
+      "mtime": 1767553864.9688952,
+      "sha256": "b5fef6dcff47e42688855d8e8eafe26e0e5f26f67885fce438bcbfa206691409"
+    }
+  },
+  "finalized_files": [
+    "output.txt"
+  ],
+  "snapshotted_steps": [
+    1,
+    1,
+    1,
+    2,
+    2,
+    2,
+    3,
+    3,
+    3,
+    4,
+    4,
+    4,
+    5,
+    5,
+    5,
+    6,
+    6,
+    6,
+    7,
+    7,
+    7
+  ],
+  "initial_settings_snapshot": {
+    "color_scheme_default": "default"
+  },
+  "last_settings_snapshot": {
+    "color_scheme_default": "default"
+  },
+  "_step_2_before_snapshot": {},
+  "_step_3_before_snapshot": {},
+  "_step_4_before_snapshot": {},
+  "_step_5_before_snapshot": {},
+  "_step_6_before_snapshot": {
+    "output.txt": {
+      "size": 11,
+      "mtime": 1767553864.9688952,
+      "sha256": "b5fef6dcff47e42688855d8e8eafe26e0e5f26f67885fce438bcbfa206691409"
+    }
+  },
+  "_step_7_before_snapshot": {
+    "output.txt": {
+      "size": 11,
+      "mtime": 1767553864.9688952,
+      "sha256": "b5fef6dcff47e42688855d8e8eafe26e0e5f26f67885fce438bcbfa206691409"
+    }
+  }
+}

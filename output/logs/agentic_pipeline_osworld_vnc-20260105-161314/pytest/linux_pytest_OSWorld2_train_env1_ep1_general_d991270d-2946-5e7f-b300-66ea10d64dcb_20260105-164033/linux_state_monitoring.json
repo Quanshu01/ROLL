@@ -1,0 +1,98 @@
+{
+  "initial_snapshot": {
+    "newfile.txt": {
+      "size": 0,
+      "mtime": 1767602480.2177336,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "last_snapshot": {
+    "newfile.txt": {
+      "size": 12,
+      "mtime": 1767602640.3067229,
+      "sha256": "1c3ef9a7c817b4642bcb3cb1456fbce92a6f992df2e1d6ad9d8a2dfb4fdf42f6"
+    }
+  },
+  "finalized_files": [
+    "newfile.txt"
+  ],
+  "snapshotted_steps": [
+    1,
+    1,
+    1,
+    2,
+    2,
+    2,
+    3,
+    3,
+    3,
+    4,
+    4,
+    4,
+    5,
+    5,
+    5,
+    6,
+    6,
+    6,
+    7,
+    7,
+    7,
+    8,
+    8,
+    8,
+    9,
+    9,
+    9
+  ],
+  "initial_settings_snapshot": {
+    "color_scheme_default": "default"
+  },
+  "last_settings_snapshot": {
+    "color_scheme_default": "default"
+  },
+  "_step_2_before_snapshot": {},
+  "_step_3_before_snapshot": {},
+  "_step_4_before_snapshot": {
+    "newfile.txt": {
+      "size": 0,
+      "mtime": 1767602480.2177336,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "_step_5_before_snapshot": {
+    "newfile.txt": {
+      "size": 13,
+      "mtime": 1767602508.1180634,
+      "sha256": "a1fff0ffefb9eace7230c24e50731f0a91c62f9cefdfe77121c2f607125dffae"
+    }
+  },
+  "_step_6_before_snapshot": {
+    "newfile.txt": {
+      "size": 13,
+      "mtime": 1767602508.1180634,
+      "sha256": "a1fff0ffefb9eace7230c24e50731f0a91c62f9cefdfe77121c2f607125dffae"
+    }
+  },
+  "_step_7_before_snapshot": {
+    "newfile.txt": {
+      "size": 13,
+      "mtime": 1767602508.1180634,
+      "sha256": "a1fff0ffefb9eace7230c24e50731f0a91c62f9cefdfe77121c2f607125dffae"
+    }
+  },
+  "_step_8_before_snapshot": {
+    "newfile.txt": {
+      "size": 16,
+      "mtime": 1767602586.990639,
+      "sha256": "da2a17df486139bdf0142aaf8765cdd1870065929de0d76c92aef6672b807032"
+    }
+  },
+  "_step_9_before_snapshot": {
+    "newfile.txt": {
+      "size": 16,
+      "mtime": 1767602586.990639,
+      "sha256": "da2a17df486139bdf0142aaf8765cdd1870065929de0d76c92aef6672b807032"
+    }
+  }
+}

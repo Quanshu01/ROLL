@@ -1,0 +1,104 @@
+{
+  "initial_snapshot": {
+    "file.txt": {
+      "size": 10,
+      "mtime": 1767553065.6703875,
+      "sha256": "114811b0b8998cb9853a5379598021410feddf69bb2ee7b7145d052a7e9b5d45"
+    }
+  },
+  "last_snapshot": {
+    "file.txt": {
+      "size": 16,
+      "mtime": 1767553197.5082853,
+      "sha256": "e93f94cf23a68bfa4611888827956bee089341f661c47fd28fb4112062f7ee01"
+    }
+  },
+  "finalized_files": [
+    "file.txt"
+  ],
+  "snapshotted_steps": [
+    1,
+    1,
+    1,
+    2,
+    2,
+    2,
+    3,
+    3,
+    3,
+    4,
+    4,
+    4,
+    5,
+    5,
+    5,
+    6,
+    6,
+    6,
+    7,
+    7,
+    7,
+    8,
+    8,
+    8,
+    9,
+    9,
+    9
+  ],
+  "initial_settings_snapshot": {
+    "color_scheme_default": "default"
+  },
+  "last_settings_snapshot": {
+    "color_scheme_default": "default"
+  },
+  "_step_2_before_snapshot": {},
+  "_step_3_before_snapshot": {
+    "file.txt": {
+      "size": 10,
+      "mtime": 1767553065.6703875,
+      "sha256": "114811b0b8998cb9853a5379598021410feddf69bb2ee7b7145d052a7e9b5d45"
+    }
+  },
+  "_step_4_before_snapshot": {
+    "file.txt": {
+      "size": 10,
+      "mtime": 1767553065.6703875,
+      "sha256": "114811b0b8998cb9853a5379598021410feddf69bb2ee7b7145d052a7e9b5d45"
+    }
+  },
+  "_step_5_before_snapshot": {
+    "file.txt": {
+      "size": 12,
+      "mtime": 1767553119.005854,
+      "sha256": "36b2092ef73c3ab3304e5805abf6b148b9fb6c21434611b615c1f5b7854e7697"
+    }
+  },
+  "_step_6_before_snapshot": {
+    "file.txt": {
+      "size": 12,
+      "mtime": 1767553119.005854,
+      "sha256": "36b2092ef73c3ab3304e5805abf6b148b9fb6c21434611b615c1f5b7854e7697"
+    }
+  },
+  "_step_7_before_snapshot": {
+    "file.txt": {
+      "size": 12,
+      "mtime": 1767553119.005854,
+      "sha256": "36b2092ef73c3ab3304e5805abf6b148b9fb6c21434611b615c1f5b7854e7697"
+    }
+  },
+  "_step_8_before_snapshot": {
+    "file.txt": {
+      "size": 16,
+      "mtime": 1767553197.5082853,
+      "sha256": "e93f94cf23a68bfa4611888827956bee089341f661c47fd28fb4112062f7ee01"
+    }
+  },
+  "_step_9_before_snapshot": {
+    "file.txt": {
+      "size": 16,
+      "mtime": 1767553197.5082853,
+      "sha256": "e93f94cf23a68bfa4611888827956bee089341f661c47fd28fb4112062f7ee01"
+    }
+  }
+}

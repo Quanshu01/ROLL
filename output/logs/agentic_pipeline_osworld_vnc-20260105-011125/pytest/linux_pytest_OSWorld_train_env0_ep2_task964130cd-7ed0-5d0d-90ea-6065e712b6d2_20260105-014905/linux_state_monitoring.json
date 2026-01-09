@@ -1,0 +1,88 @@
+{
+  "initial_snapshot": {
+    "check_status.sh": {
+      "size": 0,
+      "mtime": 1767548986.07159,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "last_snapshot": {
+    "check_status.sh": {
+      "size": 0,
+      "mtime": 1767548986.07159,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "finalized_files": [
+    "check_status.sh"
+  ],
+  "snapshotted_steps": [
+    1,
+    1,
+    1,
+    2,
+    2,
+    2,
+    3,
+    3,
+    3,
+    4,
+    4,
+    4,
+    5,
+    5,
+    5,
+    6,
+    6,
+    6,
+    7,
+    7,
+    7,
+    8,
+    8,
+    8
+  ],
+  "initial_settings_snapshot": {
+    "color_scheme_default": "default"
+  },
+  "last_settings_snapshot": {
+    "color_scheme_default": "default"
+  },
+  "_step_2_before_snapshot": {},
+  "_step_3_before_snapshot": {},
+  "_step_4_before_snapshot": {
+    "check_status.sh": {
+      "size": 0,
+      "mtime": 1767548986.07159,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "_step_5_before_snapshot": {
+    "check_status.sh": {
+      "size": 0,
+      "mtime": 1767548986.07159,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "_step_6_before_snapshot": {
+    "check_status.sh": {
+      "size": 0,
+      "mtime": 1767548986.07159,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "_step_7_before_snapshot": {
+    "check_status.sh": {
+      "size": 0,
+      "mtime": 1767548986.07159,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "_step_8_before_snapshot": {
+    "check_status.sh": {
+      "size": 0,
+      "mtime": 1767548986.07159,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  }
+}

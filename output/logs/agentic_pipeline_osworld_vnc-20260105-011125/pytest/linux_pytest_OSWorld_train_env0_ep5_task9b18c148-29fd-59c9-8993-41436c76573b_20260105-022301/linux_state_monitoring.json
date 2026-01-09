@@ -1,0 +1,110 @@
+{
+  "initial_snapshot": {
+    "issue_react.txtls": {
+      "size": 13,
+      "mtime": 1767550999.795576,
+      "sha256": "0f868df5d0ef771b1d16a3f643029f5ec434744d16906855c7a133e95644c404"
+    }
+  },
+  "last_snapshot": {
+    "issue_react.txtls": {
+      "size": 13,
+      "mtime": 1767550999.795576,
+      "sha256": "0f868df5d0ef771b1d16a3f643029f5ec434744d16906855c7a133e95644c404"
+    },
+    "issue_react.txt": {
+      "size": 9,
+      "mtime": 1767551103.5453985,
+      "sha256": "a65fe5da1be80a3892105672b8f13864f954726e595aa0c14ae644a720e6de7b"
+    }
+  },
+  "finalized_files": [
+    "issue_react.txt",
+    "issue_react.txtls"
+  ],
+  "snapshotted_steps": [
+    1,
+    1,
+    1,
+    2,
+    2,
+    2,
+    3,
+    3,
+    3,
+    4,
+    4,
+    4,
+    5,
+    5,
+    5,
+    6,
+    6,
+    6,
+    7,
+    7,
+    7,
+    8,
+    8,
+    8
+  ],
+  "initial_settings_snapshot": {
+    "color_scheme_default": "default"
+  },
+  "last_settings_snapshot": {
+    "color_scheme_default": "default"
+  },
+  "_step_2_before_snapshot": {},
+  "_step_3_before_snapshot": {
+    "issue_react.txtls": {
+      "size": 13,
+      "mtime": 1767550999.795576,
+      "sha256": "0f868df5d0ef771b1d16a3f643029f5ec434744d16906855c7a133e95644c404"
+    }
+  },
+  "_step_4_before_snapshot": {
+    "issue_react.txtls": {
+      "size": 13,
+      "mtime": 1767550999.795576,
+      "sha256": "0f868df5d0ef771b1d16a3f643029f5ec434744d16906855c7a133e95644c404"
+    }
+  },
+  "_step_5_before_snapshot": {
+    "issue_react.txtls": {
+      "size": 13,
+      "mtime": 1767550999.795576,
+      "sha256": "0f868df5d0ef771b1d16a3f643029f5ec434744d16906855c7a133e95644c404"
+    }
+  },
+  "_step_6_before_snapshot": {
+    "issue_react.txtls": {
+      "size": 13,
+      "mtime": 1767550999.795576,
+      "sha256": "0f868df5d0ef771b1d16a3f643029f5ec434744d16906855c7a133e95644c404"
+    }
+  },
+  "_step_7_before_snapshot": {
+    "issue_react.txtls": {
+      "size": 13,
+      "mtime": 1767550999.795576,
+      "sha256": "0f868df5d0ef771b1d16a3f643029f5ec434744d16906855c7a133e95644c404"
+    },
+    "issue_react.txt": {
+      "size": 9,
+      "mtime": 1767551103.5453985,
+      "sha256": "a65fe5da1be80a3892105672b8f13864f954726e595aa0c14ae644a720e6de7b"
+    }
+  },
+  "_step_8_before_snapshot": {
+    "issue_react.txtls": {
+      "size": 13,
+      "mtime": 1767550999.795576,
+      "sha256": "0f868df5d0ef771b1d16a3f643029f5ec434744d16906855c7a133e95644c404"
+    },
+    "issue_react.txt": {
+      "size": 9,
+      "mtime": 1767551103.5453985,
+      "sha256": "a65fe5da1be80a3892105672b8f13864f954726e595aa0c14ae644a720e6de7b"
+    }
+  }
+}
