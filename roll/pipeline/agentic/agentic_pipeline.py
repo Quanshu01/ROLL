@@ -474,6 +474,7 @@ class AgenticPipeline(BasePipeline):
                                         self.log_lambda.clamp_(max=self.log_lambda_max)
                                 
                                 metrics["train/lambda"] = torch.exp(self.log_lambda).item()
+                                metrics["train/log_lambda"] = self.log_lambda.item()
                                 metrics["train/episode_cost"] = episode_cost_mean
                                 metrics["train/episode_cost_current"] = avg_cost
                                 logger.info(
@@ -848,6 +849,32 @@ def compute_data_metrics(batch):
             "critic/step_rewards_norm/max": step_rewards_norm.max().detach().item(),
             "critic/step_rewards_norm/min": step_rewards_norm.min().detach().item(),
         })
+    
+    # 新增：Cost相关的指标（仅在启用cost约束时）
+    if "cost_values" in batch.batch.keys():
+        cost_values = batch.batch["cost_values"]
+        metrics.update({
+            "critic/cost_values/mean": masked_mean(cost_values, response_mask).detach().item(),
+            "critic/cost_values/max": torch.max(cost_values[response_mask]).detach().item() if response_mask.sum() > 0 else 0.0,
+            "critic/cost_values/min": torch.min(cost_values[response_mask]).detach().item() if response_mask.sum() > 0 else 0.0,
+        })
+    
+    if "cost_advantages" in batch.batch.keys():
+        cost_advantages = batch.batch["cost_advantages"]
+        metrics.update({
+            "critic/cost_advantages/mean": masked_mean(cost_advantages, response_mask).detach().item(),
+            "critic/cost_advantages/max": torch.max(cost_advantages[response_mask]).detach().item() if response_mask.sum() > 0 else 0.0,
+            "critic/cost_advantages/min": torch.min(cost_advantages[response_mask]).detach().item() if response_mask.sum() > 0 else 0.0,
+        })
+    
+    if "cost_returns" in batch.batch.keys():
+        cost_returns = batch.batch["cost_returns"]
+        metrics.update({
+            "critic/cost_returns/mean": masked_mean(cost_returns, response_mask).detach().item(),
+            "critic/cost_returns/max": torch.max(cost_returns[response_mask]).detach().item() if response_mask.sum() > 0 else 0.0,
+            "critic/cost_returns/min": torch.min(cost_returns[response_mask]).detach().item() if response_mask.sum() > 0 else 0.0,
+        })
+    
     return metrics
 
 class GroupFilter:

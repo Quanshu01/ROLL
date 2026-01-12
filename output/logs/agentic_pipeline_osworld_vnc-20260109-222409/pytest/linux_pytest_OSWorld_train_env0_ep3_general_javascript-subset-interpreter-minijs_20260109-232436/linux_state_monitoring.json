@@ -1,0 +1,104 @@
+{
+  "initial_snapshot": {
+    "script.js": {
+      "size": 27,
+      "mtime": 1768001100.2516832,
+      "sha256": "ac5add4f7479e6dab5e446bc2d75a244a4f94ab2a31996881cdd97bea875525b"
+    }
+  },
+  "last_snapshot": {
+    "script.js": {
+      "size": 27,
+      "mtime": 1768001100.2516832,
+      "sha256": "ac5add4f7479e6dab5e446bc2d75a244a4f94ab2a31996881cdd97bea875525b"
+    }
+  },
+  "finalized_files": [
+    "script.js"
+  ],
+  "snapshotted_steps": [
+    1,
+    1,
+    1,
+    2,
+    2,
+    2,
+    3,
+    3,
+    3,
+    4,
+    4,
+    4,
+    5,
+    5,
+    5,
+    6,
+    6,
+    6,
+    7,
+    7,
+    7,
+    8,
+    8,
+    8,
+    9,
+    9,
+    9
+  ],
+  "initial_settings_snapshot": {
+    "color_scheme_default": "default"
+  },
+  "last_settings_snapshot": {
+    "color_scheme_default": "default"
+  },
+  "_step_2_before_snapshot": {},
+  "_step_3_before_snapshot": {
+    "script.js": {
+      "size": 27,
+      "mtime": 1768001100.2516832,
+      "sha256": "ac5add4f7479e6dab5e446bc2d75a244a4f94ab2a31996881cdd97bea875525b"
+    }
+  },
+  "_step_4_before_snapshot": {
+    "script.js": {
+      "size": 27,
+      "mtime": 1768001100.2516832,
+      "sha256": "ac5add4f7479e6dab5e446bc2d75a244a4f94ab2a31996881cdd97bea875525b"
+    }
+  },
+  "_step_5_before_snapshot": {
+    "script.js": {
+      "size": 27,
+      "mtime": 1768001100.2516832,
+      "sha256": "ac5add4f7479e6dab5e446bc2d75a244a4f94ab2a31996881cdd97bea875525b"
+    }
+  },
+  "_step_6_before_snapshot": {
+    "script.js": {
+      "size": 27,
+      "mtime": 1768001100.2516832,
+      "sha256": "ac5add4f7479e6dab5e446bc2d75a244a4f94ab2a31996881cdd97bea875525b"
+    }
+  },
+  "_step_7_before_snapshot": {
+    "script.js": {
+      "size": 27,
+      "mtime": 1768001100.2516832,
+      "sha256": "ac5add4f7479e6dab5e446bc2d75a244a4f94ab2a31996881cdd97bea875525b"
+    }
+  },
+  "_step_8_before_snapshot": {
+    "script.js": {
+      "size": 27,
+      "mtime": 1768001100.2516832,
+      "sha256": "ac5add4f7479e6dab5e446bc2d75a244a4f94ab2a31996881cdd97bea875525b"
+    }
+  },
+  "_step_9_before_snapshot": {
+    "script.js": {
+      "size": 27,
+      "mtime": 1768001100.2516832,
+      "sha256": "ac5add4f7479e6dab5e446bc2d75a244a4f94ab2a31996881cdd97bea875525b"
+    }
+  }
+}

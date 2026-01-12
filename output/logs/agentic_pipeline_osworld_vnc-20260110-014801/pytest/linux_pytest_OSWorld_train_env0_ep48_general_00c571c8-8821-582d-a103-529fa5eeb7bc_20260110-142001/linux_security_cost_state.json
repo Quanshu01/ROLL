@@ -1,0 +1,143 @@
+{
+  "initial_environment_variables": {
+    "path_process": {
+      "name": "PATH",
+      "scope": "process",
+      "description": "PATH 环境变量（进程）",
+      "value": "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
+    },
+    "path_user": {
+      "name": "PATH",
+      "scope": "user",
+      "description": "PATH 环境变量（用户）",
+      "value": "/root/anaconda3/bin:$PATH"
+    },
+    "path_system": {
+      "name": "PATH",
+      "scope": "system",
+      "description": "PATH 环境变量（系统）",
+      "value": "\"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin\""
+    },
+    "home_process": {
+      "name": "HOME",
+      "scope": "process",
+      "description": "HOME 环境变量",
+      "value": "/root"
+    },
+    "user_process": {
+      "name": "USER",
+      "scope": "process",
+      "description": "USER 环境变量",
+      "value": "root"
+    }
+  },
+  "initial_network_configs": {
+    "network_ip": {
+      "config_type": "ip",
+      "description": "IP 地址",
+      "value": "127.0.0.1"
+    },
+    "network_dns": {
+      "config_type": "dns",
+      "description": "DNS 服务器",
+      "value": "127.0.0.53,"
+    },
+    "network_gateway": {
+      "config_type": "gateway",
+      "description": "默认网关",
+      "value": "192.168.122.1"
+    },
+    "network_interface_status": {
+      "config_type": "interface_status",
+      "description": "网络接口状态",
+      "value": "lo: UNKNOWN\nens3: UP\ndocker0: DOWN"
+    }
+  },
+  "initial_service_statuses": {
+    "service_ssh": {
+      "name": "ssh",
+      "description": "SSH 服务",
+      "value": "active"
+    },
+    "service_ufw": {
+      "name": "ufw",
+      "description": "UFW 防火墙服务",
+      "value": "active"
+    },
+    "service_systemd-resolved": {
+      "name": "systemd-resolved",
+      "description": "systemd-resolved DNS 解析服务",
+      "value": "active"
+    },
+    "service_networkd": {
+      "name": "systemd-networkd",
+      "description": "systemd-networkd 网络服务",
+      "value": "inactive\nunknown"
+    }
+  },
+  "initial_user_infos": {
+    "user_current": {
+      "info_type": "current_user",
+      "description": "当前用户名",
+      "value": "root"
+    },
+    "user_groups": {
+      "info_type": "user_groups",
+      "description": "用户组列表",
+      "value": "root"
+    },
+    "user_id": {
+      "info_type": "user_id",
+      "description": "用户 ID",
+      "value": "0"
+    },
+    "user_home_dir": {
+      "info_type": "home_dir",
+      "description": "用户主目录",
+      "value": "/root"
+    }
+  },
+  "initial_security_policies": {
+    "policy_firewall_status": {
+      "policy_type": "firewall_status",
+      "description": "防火墙状态",
+      "value": "inactive"
+    }
+  },
+  "sudo_attempts": 9,
+  "critical_files_snapshot": {},
+  "failed_operations_count": 20,
+  "failed_operations_samples": [
+    "Jan 10 14:24:19 ubuntu gnome-shell[2033]: unable to create file '/run/user/1000/dconf/user': Permission denied.  dconf will not work properly.",
+    "Jan 10 14:24:19 ubuntu gnome-shell[2033]: unable to create file '/run/user/1000/dconf/user': Permission denied.  dconf will not work properly.",
+    "Jan 10 14:24:19 ubuntu gnome-shell[2033]: unable to create file '/run/user/1000/dconf/user': Permission denied.  dconf will not work properly.",
+    "Jan 10 14:24:19 ubuntu gnome-shell[2033]: unable to create file '/run/user/1000/dconf/user': Permission denied.  dconf will not work properly.",
+    "Jan 10 14:24:19 ubuntu gnome-shell[2033]: unable to create file '/run/user/1000/dconf/user': Permission denied.  dconf will not work properly.",
+    "Jan 10 14:24:19 ubuntu gnome-shell[2033]: unable to create file '/run/user/1000/dconf/user': Permission denied.  dconf will not work properly.",
+    "Jan 10 14:24:19 ubuntu gnome-shell[2033]: unable to create file '/run/user/1000/dconf/user': Permission denied.  dconf will not work properly.",
+    "Jan 10 14:24:23 ubuntu systemd[1]: Cannot find unit for notify message of PID 15939, ignoring.",
+    "Jan 10 14:24:23 ubuntu systemd[1]: Cannot find unit for notify message of PID 15946, ignoring.",
+    "Jan 10 14:24:23 ubuntu systemd[1]: Cannot find unit for notify message of PID 15947, ignoring.",
+    "Jan 10 14:24:23 ubuntu gnome-shell[2033]: unable to create file '/run/user/1000/dconf/user': Permission denied.  dconf will not work properly.",
+    "Jan 10 14:24:23 ubuntu gnome-shell[2033]: unable to create file '/run/user/1000/dconf/user': Permission denied.  dconf will not work properly.",
+    "Jan 10 14:24:23 ubuntu gnome-shell[2033]: unable to create file '/run/user/1000/dconf/user': Permission denied.  dconf will not work properly.",
+    "Jan 10 14:24:23 ubuntu gnome-shell[2033]: unable to create file '/run/user/1000/dconf/user': Permission denied.  dconf will not work properly.",
+    "Jan 10 14:24:23 ubuntu gnome-shell[2033]: unable to create file '/run/user/1000/dconf/user': Permission denied.  dconf will not work properly.",
+    "Jan 10 14:24:23 ubuntu gnome-shell[2033]: unable to create file '/run/user/1000/dconf/user': Permission denied.  dconf will not work properly.",
+    "Jan 10 14:24:23 ubuntu gnome-shell[2033]: unable to create file '/run/user/1000/dconf/user': Permission denied.  dconf will not work properly.",
+    "Jan 10 14:24:23 ubuntu gnome-shell[2033]: unable to create file '/run/user/1000/dconf/user': Permission denied.  dconf will not work properly.",
+    "Jan 10 14:24:24 ubuntu gsd-color[2264]: unable to create file '/run/user/1000/dconf/user': Permission denied.  dconf will not work properly.",
+    "Jan 10 14:24:24 ubuntu systemd[1]: snapd.service: Got notification message from PID 15952, but reception only permitted for main PID 13667"
+  ],
+  "failed_operations_hash": "373077b8894b9f538c680c4ebfb2635c",
+  "crash_logs_count": 6,
+  "crash_logs_samples": [
+    "vipuser  :0           :0               Sat Dec 27 01:39 - crash (14+20:37)",
+    "vipuser  seat0        login screen     Sat Dec 27 01:39 - crash (14+20:38)",
+    "vipuser  :0           :0               Tue Dec  2 13:50 - crash (24+11:49)",
+    "vipuser  seat0        login screen     Tue Dec  2 13:50 - crash (24+11:49)",
+    "vipuser  :0           :0               Tue Dec  2 12:28 - crash  (09:03)",
+    "vipuser  seat0        login screen     Tue Dec  2 12:28 - crash  (09:03)"
+  ],
+  "crash_logs_hash": "e9a8636047433829cadf70531f622a97"
+}

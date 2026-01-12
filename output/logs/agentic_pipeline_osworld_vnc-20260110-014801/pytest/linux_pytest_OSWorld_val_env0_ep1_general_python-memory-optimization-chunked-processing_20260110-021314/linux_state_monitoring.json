@@ -1,0 +1,58 @@
+{
+  "initial_snapshot": {},
+  "last_snapshot": {},
+  "finalized_files": [],
+  "snapshotted_steps": [
+    1,
+    1,
+    1,
+    2,
+    2,
+    2,
+    3,
+    3,
+    3,
+    4,
+    4,
+    4,
+    5,
+    5,
+    5,
+    6,
+    6,
+    6,
+    7,
+    7,
+    7,
+    8,
+    8,
+    8
+  ],
+  "_debug_info": {
+    "snapshot_diagnostics": {
+      "root_path": "/home/vipuser/Documents",
+      "error": "vm_client.run_command returned empty output",
+      "output_received": false,
+      "python_test_failed": true,
+      "python_test_output": "None",
+      "simple_echo_test": "None",
+      "vm_connection_issue": true
+    },
+    "target_root": "/home/vipuser/Documents",
+    "snapshot_is_empty": true,
+    "snapshot_error": "vm_client.run_command returned empty output"
+  },
+  "initial_settings_snapshot": {
+    "color_scheme_default": "default"
+  },
+  "last_settings_snapshot": {
+    "color_scheme_default": ""
+  },
+  "_step_2_before_snapshot": {},
+  "_step_3_before_snapshot": {},
+  "_step_4_before_snapshot": {},
+  "_step_5_before_snapshot": {},
+  "_step_6_before_snapshot": {},
+  "_step_7_before_snapshot": {},
+  "_step_8_before_snapshot": {}
+}

@@ -1,0 +1,98 @@
+{
+  "initial_snapshot": {
+    "result.txt": {
+      "size": 20,
+      "mtime": 1768002985.5417645,
+      "sha256": "3c4702ebc7fa2cf22201fcd9324c699635fd7701e3e4ae37197fc9a7586adb0b"
+    }
+  },
+  "last_snapshot": {
+    "result.txt": {
+      "size": 20,
+      "mtime": 1768003162.9680336,
+      "sha256": "3c4702ebc7fa2cf22201fcd9324c699635fd7701e3e4ae37197fc9a7586adb0b"
+    }
+  },
+  "finalized_files": [
+    "result.txt"
+  ],
+  "snapshotted_steps": [
+    1,
+    1,
+    1,
+    2,
+    2,
+    2,
+    3,
+    3,
+    3,
+    4,
+    4,
+    4,
+    5,
+    5,
+    5,
+    6,
+    6,
+    6,
+    7,
+    7,
+    7,
+    8,
+    8,
+    8,
+    9,
+    9,
+    9
+  ],
+  "initial_settings_snapshot": {
+    "color_scheme_default": "default"
+  },
+  "last_settings_snapshot": {
+    "color_scheme_default": "default"
+  },
+  "_step_2_before_snapshot": {},
+  "_step_3_before_snapshot": {},
+  "_step_4_before_snapshot": {
+    "result.txt": {
+      "size": 20,
+      "mtime": 1768002985.5417645,
+      "sha256": "3c4702ebc7fa2cf22201fcd9324c699635fd7701e3e4ae37197fc9a7586adb0b"
+    }
+  },
+  "_step_5_before_snapshot": {
+    "result.txt": {
+      "size": 20,
+      "mtime": 1768003014.33195,
+      "sha256": "3c4702ebc7fa2cf22201fcd9324c699635fd7701e3e4ae37197fc9a7586adb0b"
+    }
+  },
+  "_step_6_before_snapshot": {
+    "result.txt": {
+      "size": 20,
+      "mtime": 1768003044.497616,
+      "sha256": "3c4702ebc7fa2cf22201fcd9324c699635fd7701e3e4ae37197fc9a7586adb0b"
+    }
+  },
+  "_step_7_before_snapshot": {
+    "result.txt": {
+      "size": 20,
+      "mtime": 1768003072.1940215,
+      "sha256": "3c4702ebc7fa2cf22201fcd9324c699635fd7701e3e4ae37197fc9a7586adb0b"
+    }
+  },
+  "_step_8_before_snapshot": {
+    "result.txt": {
+      "size": 20,
+      "mtime": 1768003100.841909,
+      "sha256": "3c4702ebc7fa2cf22201fcd9324c699635fd7701e3e4ae37197fc9a7586adb0b"
+    }
+  },
+  "_step_9_before_snapshot": {
+    "result.txt": {
+      "size": 20,
+      "mtime": 1768003130.2828102,
+      "sha256": "3c4702ebc7fa2cf22201fcd9324c699635fd7701e3e4ae37197fc9a7586adb0b"
+    }
+  }
+}

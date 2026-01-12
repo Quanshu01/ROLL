@@ -1,0 +1,78 @@
+{
+  "initial_snapshot": {
+    "result.txt": {
+      "size": 18,
+      "mtime": 1768024789.3743553,
+      "sha256": "ca014e196cb47ce69775de2c73a16649d8eea48aafd37a38cb70bb7cc6f09eab"
+    }
+  },
+  "last_snapshot": {
+    "result.txt": {
+      "size": 18,
+      "mtime": 1768024917.302071,
+      "sha256": "ca014e196cb47ce69775de2c73a16649d8eea48aafd37a38cb70bb7cc6f09eab"
+    }
+  },
+  "finalized_files": [
+    "result.txt"
+  ],
+  "snapshotted_steps": [
+    1,
+    1,
+    1,
+    2,
+    2,
+    2,
+    3,
+    3,
+    3,
+    4,
+    4,
+    4,
+    5,
+    5,
+    5,
+    6,
+    6,
+    6,
+    7,
+    7,
+    7
+  ],
+  "initial_settings_snapshot": {
+    "color_scheme_default": "default"
+  },
+  "last_settings_snapshot": {
+    "color_scheme_default": "default"
+  },
+  "_step_2_before_snapshot": {},
+  "_step_3_before_snapshot": {},
+  "_step_4_before_snapshot": {
+    "result.txt": {
+      "size": 18,
+      "mtime": 1768024789.3743553,
+      "sha256": "ca014e196cb47ce69775de2c73a16649d8eea48aafd37a38cb70bb7cc6f09eab"
+    }
+  },
+  "_step_5_before_snapshot": {
+    "result.txt": {
+      "size": 18,
+      "mtime": 1768024819.9565475,
+      "sha256": "ca014e196cb47ce69775de2c73a16649d8eea48aafd37a38cb70bb7cc6f09eab"
+    }
+  },
+  "_step_6_before_snapshot": {
+    "result.txt": {
+      "size": 18,
+      "mtime": 1768024850.8533354,
+      "sha256": "ca014e196cb47ce69775de2c73a16649d8eea48aafd37a38cb70bb7cc6f09eab"
+    }
+  },
+  "_step_7_before_snapshot": {
+    "result.txt": {
+      "size": 18,
+      "mtime": 1768024883.205637,
+      "sha256": "ca014e196cb47ce69775de2c73a16649d8eea48aafd37a38cb70bb7cc6f09eab"
+    }
+  }
+}

@@ -1,0 +1,78 @@
+{
+  "initial_snapshot": {
+    "newfile.txt": {
+      "size": 13,
+      "mtime": 1767992287.2212727,
+      "sha256": "a1fff0ffefb9eace7230c24e50731f0a91c62f9cefdfe77121c2f607125dffae"
+    }
+  },
+  "last_snapshot": {
+    "newfile.txt": {
+      "size": 16,
+      "mtime": 1767992374.4515316,
+      "sha256": "da2a17df486139bdf0142aaf8765cdd1870065929de0d76c92aef6672b807032"
+    }
+  },
+  "finalized_files": [
+    "newfile.txt"
+  ],
+  "snapshotted_steps": [
+    1,
+    1,
+    1,
+    2,
+    2,
+    2,
+    3,
+    3,
+    3,
+    4,
+    4,
+    4,
+    5,
+    5,
+    5,
+    6,
+    6,
+    6,
+    7,
+    7,
+    7
+  ],
+  "initial_settings_snapshot": {
+    "color_scheme_default": "default"
+  },
+  "last_settings_snapshot": {
+    "color_scheme_default": "default"
+  },
+  "_step_2_before_snapshot": {},
+  "_step_3_before_snapshot": {},
+  "_step_4_before_snapshot": {
+    "newfile.txt": {
+      "size": 13,
+      "mtime": 1767992287.2212727,
+      "sha256": "a1fff0ffefb9eace7230c24e50731f0a91c62f9cefdfe77121c2f607125dffae"
+    }
+  },
+  "_step_5_before_snapshot": {
+    "newfile.txt": {
+      "size": 13,
+      "mtime": 1767992287.2212727,
+      "sha256": "a1fff0ffefb9eace7230c24e50731f0a91c62f9cefdfe77121c2f607125dffae"
+    }
+  },
+  "_step_6_before_snapshot": {
+    "newfile.txt": {
+      "size": 13,
+      "mtime": 1767992287.2212727,
+      "sha256": "a1fff0ffefb9eace7230c24e50731f0a91c62f9cefdfe77121c2f607125dffae"
+    }
+  },
+  "_step_7_before_snapshot": {
+    "newfile.txt": {
+      "size": 16,
+      "mtime": 1767992374.4515316,
+      "sha256": "da2a17df486139bdf0142aaf8765cdd1870065929de0d76c92aef6672b807032"
+    }
+  }
+}

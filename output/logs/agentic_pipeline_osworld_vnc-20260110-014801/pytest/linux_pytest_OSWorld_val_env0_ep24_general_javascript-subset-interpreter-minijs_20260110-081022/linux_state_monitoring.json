@@ -1,0 +1,78 @@
+{
+  "initial_snapshot": {
+    "minijs.py": {
+      "size": 104,
+      "mtime": 1768003878.527941,
+      "sha256": "e443ccace416ea3caa773f9e8f42e159679bf6297ef5afb337fbc503edb5fcca"
+    }
+  },
+  "last_snapshot": {
+    "minijs.py": {
+      "size": 104,
+      "mtime": 1768003993.0378957,
+      "sha256": "e443ccace416ea3caa773f9e8f42e159679bf6297ef5afb337fbc503edb5fcca"
+    }
+  },
+  "finalized_files": [
+    "minijs.py"
+  ],
+  "snapshotted_steps": [
+    1,
+    1,
+    1,
+    2,
+    2,
+    2,
+    3,
+    3,
+    3,
+    4,
+    4,
+    4,
+    5,
+    5,
+    5,
+    6,
+    6,
+    6,
+    7,
+    7,
+    7
+  ],
+  "initial_settings_snapshot": {
+    "color_scheme_default": "default"
+  },
+  "last_settings_snapshot": {
+    "color_scheme_default": "default"
+  },
+  "_step_2_before_snapshot": {},
+  "_step_3_before_snapshot": {},
+  "_step_4_before_snapshot": {
+    "minijs.py": {
+      "size": 104,
+      "mtime": 1768003878.527941,
+      "sha256": "e443ccace416ea3caa773f9e8f42e159679bf6297ef5afb337fbc503edb5fcca"
+    }
+  },
+  "_step_5_before_snapshot": {
+    "minijs.py": {
+      "size": 104,
+      "mtime": 1768003878.527941,
+      "sha256": "e443ccace416ea3caa773f9e8f42e159679bf6297ef5afb337fbc503edb5fcca"
+    }
+  },
+  "_step_6_before_snapshot": {
+    "minijs.py": {
+      "size": 104,
+      "mtime": 1768003878.527941,
+      "sha256": "e443ccace416ea3caa773f9e8f42e159679bf6297ef5afb337fbc503edb5fcca"
+    }
+  },
+  "_step_7_before_snapshot": {
+    "minijs.py": {
+      "size": 104,
+      "mtime": 1768003878.527941,
+      "sha256": "e443ccace416ea3caa773f9e8f42e159679bf6297ef5afb337fbc503edb5fcca"
+    }
+  }
+}

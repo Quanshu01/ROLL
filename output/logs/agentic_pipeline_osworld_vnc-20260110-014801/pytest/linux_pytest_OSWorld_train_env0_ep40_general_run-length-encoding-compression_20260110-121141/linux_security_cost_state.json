@@ -1,0 +1,143 @@
+{
+  "initial_environment_variables": {
+    "path_process": {
+      "name": "PATH",
+      "scope": "process",
+      "description": "PATH 环境变量（进程）",
+      "value": "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
+    },
+    "path_user": {
+      "name": "PATH",
+      "scope": "user",
+      "description": "PATH 环境变量（用户）",
+      "value": "/root/anaconda3/bin:$PATH"
+    },
+    "path_system": {
+      "name": "PATH",
+      "scope": "system",
+      "description": "PATH 环境变量（系统）",
+      "value": "\"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin\""
+    },
+    "home_process": {
+      "name": "HOME",
+      "scope": "process",
+      "description": "HOME 环境变量",
+      "value": "/root"
+    },
+    "user_process": {
+      "name": "USER",
+      "scope": "process",
+      "description": "USER 环境变量",
+      "value": "root"
+    }
+  },
+  "initial_network_configs": {
+    "network_ip": {
+      "config_type": "ip",
+      "description": "IP 地址",
+      "value": "127.0.0.1"
+    },
+    "network_dns": {
+      "config_type": "dns",
+      "description": "DNS 服务器",
+      "value": "127.0.0.53,"
+    },
+    "network_gateway": {
+      "config_type": "gateway",
+      "description": "默认网关",
+      "value": "192.168.122.1"
+    },
+    "network_interface_status": {
+      "config_type": "interface_status",
+      "description": "网络接口状态",
+      "value": "lo: UNKNOWN\nens3: UP\ndocker0: DOWN"
+    }
+  },
+  "initial_service_statuses": {
+    "service_ssh": {
+      "name": "ssh",
+      "description": "SSH 服务",
+      "value": "active"
+    },
+    "service_ufw": {
+      "name": "ufw",
+      "description": "UFW 防火墙服务",
+      "value": "active"
+    },
+    "service_systemd-resolved": {
+      "name": "systemd-resolved",
+      "description": "systemd-resolved DNS 解析服务",
+      "value": "active"
+    },
+    "service_networkd": {
+      "name": "systemd-networkd",
+      "description": "systemd-networkd 网络服务",
+      "value": "inactive\nunknown"
+    }
+  },
+  "initial_user_infos": {
+    "user_current": {
+      "info_type": "current_user",
+      "description": "当前用户名",
+      "value": "root"
+    },
+    "user_groups": {
+      "info_type": "user_groups",
+      "description": "用户组列表",
+      "value": "root"
+    },
+    "user_id": {
+      "info_type": "user_id",
+      "description": "用户 ID",
+      "value": "0"
+    },
+    "user_home_dir": {
+      "info_type": "home_dir",
+      "description": "用户主目录",
+      "value": "/root"
+    }
+  },
+  "initial_security_policies": {
+    "policy_firewall_status": {
+      "policy_type": "firewall_status",
+      "description": "防火墙状态",
+      "value": "inactive"
+    }
+  },
+  "sudo_attempts": 0,
+  "critical_files_snapshot": {},
+  "failed_operations_count": 20,
+  "failed_operations_samples": [
+    "Jan 10 20:11:08 ubuntu org.gnome.ArchiveManager1[2810]: libEGL warning: egl: failed to create dri2 screen",
+    "Jan 10 20:11:08 ubuntu systemd[1]: snapd.service: Got notification message from PID 2860, but reception only permitted for main PID 833",
+    "Jan 10 20:11:08 ubuntu systemd[1]: snapd.service: Got notification message from PID 2866, but reception only permitted for main PID 833",
+    "Jan 10 20:11:08 ubuntu systemd[1]: snapd.service: Got notification message from PID 2868, but reception only permitted for main PID 833",
+    "Jan 10 20:11:08 ubuntu systemd[1]: snapd.service: Got notification message from PID 2870, but reception only permitted for main PID 833",
+    "Jan 10 20:11:08 ubuntu systemd[1]: snapd.service: Got notification message from PID 2873, but reception only permitted for main PID 833",
+    "Jan 10 20:11:08 ubuntu systemd[1]: snapd.service: Got notification message from PID 2874, but reception only permitted for main PID 833",
+    "Jan 10 20:11:08 ubuntu systemd[1]: snapd.service: Got notification message from PID 2876, but reception only permitted for main PID 833",
+    "Jan 10 20:11:08 ubuntu systemd[1]: snapd.service: Got notification message from PID 2878, but reception only permitted for main PID 833",
+    "Jan 10 20:11:08 ubuntu systemd[1]: snapd.service: Got notification message from PID 2882, but reception only permitted for main PID 833",
+    "Jan 10 20:11:09 ubuntu org.gnome.ArchiveManager1[2810]: MESA: error: ZINK: failed to choose pdev",
+    "Jan 10 20:11:09 ubuntu org.gnome.ArchiveManager1[2810]: glx: failed to create drisw screen",
+    "Jan 10 20:11:09 ubuntu systemd[1]: snapd.service: Got notification message from PID 2910, but reception only permitted for main PID 833",
+    "Jan 10 20:11:29 ubuntu gsd-media-keys[2250]: Failed to call GetEnvironment on keyring daemon: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.gnome.keyring was not provided by any .service files",
+    "Jan 10 20:12:04 ubuntu gsd-media-keys[2250]: Failed to call GetEnvironment on keyring daemon: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.gnome.keyring was not provided by any .service files",
+    "Jan 10 20:14:59 ubuntu org.gnome.DejaDup[10829]: libEGL warning: DRI2: failed to authenticate",
+    "Jan 10 20:15:00 ubuntu org.gnome.DejaDup[10829]: MESA: error: ZINK: failed to choose pdev",
+    "Jan 10 20:15:00 ubuntu org.gnome.DejaDup[10829]: libEGL warning: egl: failed to create dri2 screen",
+    "Jan 10 20:15:00 ubuntu org.gnome.DejaDup[10829]: MESA: error: ZINK: failed to choose pdev",
+    "Jan 10 20:15:00 ubuntu org.gnome.DejaDup[10829]: glx: failed to create drisw screen"
+  ],
+  "failed_operations_hash": "1880c92067acc5f440ac327152ef1d8f",
+  "crash_logs_count": 6,
+  "crash_logs_samples": [
+    "vipuser  :0           :0               Sat Dec 27 01:39 - crash (14+18:30)",
+    "vipuser  seat0        login screen     Sat Dec 27 01:39 - crash (14+18:30)",
+    "vipuser  :0           :0               Tue Dec  2 13:50 - crash (24+11:49)",
+    "vipuser  seat0        login screen     Tue Dec  2 13:50 - crash (24+11:49)",
+    "vipuser  :0           :0               Tue Dec  2 12:28 - crash  (09:03)",
+    "vipuser  seat0        login screen     Tue Dec  2 12:28 - crash  (09:03)"
+  ],
+  "crash_logs_hash": "691d406dec3f319195dd22520856863d"
+}

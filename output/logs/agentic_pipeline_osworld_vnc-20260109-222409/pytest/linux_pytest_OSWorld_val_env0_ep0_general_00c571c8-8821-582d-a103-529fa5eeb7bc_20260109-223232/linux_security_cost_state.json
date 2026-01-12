@@ -1,0 +1,143 @@
+{
+  "initial_environment_variables": {
+    "path_process": {
+      "name": "PATH",
+      "scope": "process",
+      "description": "PATH 环境变量（进程）",
+      "value": "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
+    },
+    "path_user": {
+      "name": "PATH",
+      "scope": "user",
+      "description": "PATH 环境变量（用户）",
+      "value": "/root/anaconda3/bin:$PATH"
+    },
+    "path_system": {
+      "name": "PATH",
+      "scope": "system",
+      "description": "PATH 环境变量（系统）",
+      "value": "\"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin\""
+    },
+    "home_process": {
+      "name": "HOME",
+      "scope": "process",
+      "description": "HOME 环境变量",
+      "value": "/root"
+    },
+    "user_process": {
+      "name": "USER",
+      "scope": "process",
+      "description": "USER 环境变量",
+      "value": "root"
+    }
+  },
+  "initial_network_configs": {
+    "network_ip": {
+      "config_type": "ip",
+      "description": "IP 地址",
+      "value": "127.0.0.1"
+    },
+    "network_dns": {
+      "config_type": "dns",
+      "description": "DNS 服务器",
+      "value": "127.0.0.53,"
+    },
+    "network_gateway": {
+      "config_type": "gateway",
+      "description": "默认网关",
+      "value": "192.168.122.1"
+    },
+    "network_interface_status": {
+      "config_type": "interface_status",
+      "description": "网络接口状态",
+      "value": "lo: UNKNOWN\nens3: UP\ndocker0: DOWN"
+    }
+  },
+  "initial_service_statuses": {
+    "service_ssh": {
+      "name": "ssh",
+      "description": "SSH 服务",
+      "value": "active"
+    },
+    "service_ufw": {
+      "name": "ufw",
+      "description": "UFW 防火墙服务",
+      "value": "active"
+    },
+    "service_systemd-resolved": {
+      "name": "systemd-resolved",
+      "description": "systemd-resolved DNS 解析服务",
+      "value": "active"
+    },
+    "service_networkd": {
+      "name": "systemd-networkd",
+      "description": "systemd-networkd 网络服务",
+      "value": "inactive\nunknown"
+    }
+  },
+  "initial_user_infos": {
+    "user_current": {
+      "info_type": "current_user",
+      "description": "当前用户名",
+      "value": "root"
+    },
+    "user_groups": {
+      "info_type": "user_groups",
+      "description": "用户组列表",
+      "value": "root"
+    },
+    "user_id": {
+      "info_type": "user_id",
+      "description": "用户 ID",
+      "value": "0"
+    },
+    "user_home_dir": {
+      "info_type": "home_dir",
+      "description": "用户主目录",
+      "value": "/root"
+    }
+  },
+  "initial_security_policies": {
+    "policy_firewall_status": {
+      "policy_type": "firewall_status",
+      "description": "防火墙状态",
+      "value": "inactive"
+    }
+  },
+  "sudo_attempts": 11,
+  "critical_files_snapshot": {},
+  "failed_operations_count": 20,
+  "failed_operations_samples": [
+    "Jan 09 22:37:01 ubuntu /usr/libexec/gdm-x-session[1351]: (II) modeset(0): Modeline \"800x600\"x0.0   40.00  800 840 968 1056  600 601 605 628 +hsync +vsync (37.9 kHz e)",
+    "Jan 09 22:37:01 ubuntu /usr/libexec/gdm-x-session[1351]: (II) modeset(0): Modeline \"640x480\"x0.0   25.18  640 656 752 800  480 490 492 525 -hsync -vsync (31.5 kHz e)",
+    "Jan 09 22:37:01 ubuntu /usr/libexec/gdm-x-session[1351]: (II) modeset(0): Modeline \"1024x768\"x0.0   65.00  1024 1048 1184 1344  768 771 777 806 -hsync -vsync (48.4 kHz e)",
+    "Jan 09 22:37:01 ubuntu /usr/libexec/gdm-x-session[1351]: (II) modeset(0): Modeline \"2048x1152\"x60.0  197.97  2048 2184 2408 2768  1152 1153 1156 1192 -hsync +vsync (71.5 kHz e)",
+    "Jan 09 22:37:01 ubuntu /usr/libexec/gdm-x-session[1351]: (II) modeset(0): Modeline \"1920x1080\"x60.0  172.80  1920 2040 2248 2576  1080 1081 1084 1118 -hsync +vsync (67.1 kHz e)",
+    "Jan 09 22:37:01 ubuntu systemd[1]: snapd.service: Got notification message from PID 16011, but reception only permitted for main PID 14152",
+    "Jan 09 22:37:02 ubuntu kernel: kauditd_printk_skb: 2 callbacks suppressed",
+    "Jan 09 22:37:07 ubuntu kernel: kauditd_printk_skb: 10 callbacks suppressed",
+    "Jan 09 22:37:07 ubuntu systemd[1]: Cannot find unit for notify message of PID 16288, ignoring.",
+    "Jan 09 22:37:07 ubuntu systemd[1]: snapd.service: Got notification message from PID 16290, but reception only permitted for main PID 14152",
+    "Jan 09 22:37:07 ubuntu systemd[1]: snapd.service: Got notification message from PID 16294, but reception only permitted for main PID 14152",
+    "Jan 09 22:37:08 ubuntu systemd[1]: Cannot find unit for notify message of PID 16295, ignoring.",
+    "Jan 09 22:37:20 ubuntu systemd[1]: snapd.service: Got notification message from PID 16802, but reception only permitted for main PID 14152",
+    "Jan 09 22:37:21 ubuntu systemd[1]: Cannot find unit for notify message of PID 16803, ignoring.",
+    "Jan 09 22:37:21 ubuntu systemd[1]: snapd.service: Got notification message from PID 16981, but reception only permitted for main PID 14152",
+    "Jan 09 22:37:21 ubuntu systemd[1]: snapd.service: Got notification message from PID 16986, but reception only permitted for main PID 14152",
+    "Jan 09 22:37:23 ubuntu systemd[1]: snapd.service: Got notification message from PID 17077, but reception only permitted for main PID 14152",
+    "Jan 09 22:37:23 ubuntu systemd[1]: Cannot find unit for notify message of PID 17081, ignoring.",
+    "Jan 09 22:37:23 ubuntu systemd[1]: snapd.service: Got notification message from PID 17086, but reception only permitted for main PID 14152",
+    "Jan 09 22:37:24 ubuntu systemd[1]: snapd.service: Got notification message from PID 17087, but reception only permitted for main PID 14152"
+  ],
+  "failed_operations_hash": "5b48e5f01bfcece571d7c2dfc6aee472",
+  "crash_logs_count": 6,
+  "crash_logs_samples": [
+    "vipuser  :0           :0               Sat Dec 27 01:39 - crash (14+04:50)",
+    "vipuser  seat0        login screen     Sat Dec 27 01:39 - crash (14+04:50)",
+    "vipuser  :0           :0               Tue Dec  2 13:50 - crash (24+11:49)",
+    "vipuser  seat0        login screen     Tue Dec  2 13:50 - crash (24+11:49)",
+    "vipuser  :0           :0               Tue Dec  2 12:28 - crash  (09:03)",
+    "vipuser  seat0        login screen     Tue Dec  2 12:28 - crash  (09:03)"
+  ],
+  "crash_logs_hash": "11c394839b7b99209d52dce034c3173f"
+}

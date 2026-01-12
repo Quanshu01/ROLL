@@ -172,7 +172,8 @@ cython_debug/
 log
 # examples
 
-# output/
+output/data
 .vscode/
 
 wandb
+run_osworld.sh
