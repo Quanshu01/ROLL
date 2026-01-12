@@ -153,7 +153,9 @@ class AgenticConfig(PPOConfig):
                     "Please provide a WorkerConfig for cost_critic."
                 )
             if self.cost_critic.worker_cls is None:
-                self.cost_critic.worker_cls = "roll.pipeline.base_worker.CriticWorker"
+                self.cost_critic.worker_cls = "roll.pipeline.base_worker.ConstrainedCriticWorker"
+            # cost-constrained PPO uses a dedicated actor for training
+            self.actor_train.worker_cls = "roll.pipeline.base_worker.ConstrainedActorWorker"
             logger.info(
                 f"Cost constraint enabled: cost_limit={self.cost_limit}, "
                 f"lambda_init={self.lambda_init}, lambda_max={self.lambda_max}, "
