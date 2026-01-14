@@ -1,5 +1,6 @@
 from functools import partial
 from pickle import FALSE
+import re
 from typing import TYPE_CHECKING, Callable, Dict
 
 from roll.utils.prompt import BASE_CHAT_FORMAT, LONGCOT_QWEN_2_5_SYSTEM
@@ -47,6 +48,23 @@ def qwen3_chat_template(tokenizer: "PreTrainedTokenizer", conversation, tools=No
     kwargs["add_generation_prompt"] = kwargs.get("add_generation_prompt", True)
     kwargs["enable_thinking"] = True
     return tokenizer.apply_chat_template(conversation, tools, documents, **kwargs)
+
+
+@register_chat_template("qwen3_no_thinking")
+def qwen3_no_thinking_chat_template(tokenizer: "PreTrainedTokenizer", conversation, tools=None, documents=None, **kwargs):
+    """
+    Qwen3 supports a 'thinking' mode switch via tokenizer.apply_chat_template(enable_thinking=...).
+    For agentic/tool-use style rollouts we typically want non-thinking mode to avoid emitting <think>.
+    """
+    kwargs["tokenize"] = False
+    kwargs["add_generation_prompt"] = kwargs.get("add_generation_prompt", True)
+    kwargs["enable_thinking"] = False
+    text = tokenizer.apply_chat_template(conversation, tools, documents, **kwargs)
+    # Some Qwen3 tokenizers may still emit an (empty) <think>...</think> block even when enable_thinking=False.
+    # Strip it to make "no thinking" mode truly non-thinking for downstream agent/tool parsers.
+    text = re.sub(r"<think>\s*</think>\s*", "", text, flags=re.MULTILINE)
+    text = re.sub(r"<think>[\s\S]*?</think>\s*", "", text, flags=re.MULTILINE)
+    return text
 
 @register_chat_template("qwen2_5_dpo")
 def dpo_chat_template(tokenizer: "PreTrainedTokenizer", conversation, tools=None, documents=None, **kwargs):

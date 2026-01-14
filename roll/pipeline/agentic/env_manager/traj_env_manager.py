@@ -545,26 +545,25 @@ class TrajEnvManager(BaseEnvManager):
             history_item: 当前步骤的 history 项，用于存储额外观测
         """
         step_num = self.rollout_cache.step
-        
         # 获取 pytest 结果目录
-            result_dir = self._pytest_task_result_dir
-            if not result_dir or not result_dir.exists():
-                history_item['extra_observations'] = {}
-                return
-            
+        result_dir = self._pytest_task_result_dir
+        if not result_dir or not result_dir.exists():
+            history_item["extra_observations"] = {}
+            return
+
         # 使用收集器收集额外观测（所有 OSWorld-dev 相关逻辑都在收集器中）
         collector = ExtraObservationCollector(result_dir=result_dir, logger=self.logger)
         extra_obs = collector.collect(step_num=step_num)
-            
-            # 保存到 history_item
-            history_item['extra_observations'] = extra_obs
-            
-            if extra_obs:
-                self.logger.info(
+
+        # 保存到 history_item
+        history_item["extra_observations"] = extra_obs
+
+        if extra_obs:
+            self.logger.info(
                 f"[Step {step_num}] [_collect_extra_observations] ✓ 收集完成: {len(extra_obs)} 个额外观测 "
-                    f"(keys: {list(extra_obs.keys())})"
-                )
-            else:
+                f"(keys: {list(extra_obs.keys())})"
+            )
+        else:
             self.logger.debug(f"[Step {step_num}] [_collect_extra_observations] 未找到额外观测")
 
     def _run_linux_pytest_evaluator(self):
