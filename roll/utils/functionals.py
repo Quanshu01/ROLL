@@ -440,6 +440,155 @@ def compute_gae_advantage_return(
     return advantages, returns
 
 
+def compute_step_level_gae_advantage_return(
+    token_level_rewards: torch.Tensor,
+    values: torch.Tensor,
+    gamma: torch.Tensor,
+    lambd: torch.Tensor,
+    step_response_lengths: List[int],
+    logger=None,
+):
+    """
+    计算 step-level 的 GAE advantage 和 returns。
+    
+    对于每个 step：
+    1. 先计算后续 step 的 cost 通过 TD-error 传播到当前 step 的值
+    2. 将这个值加到当前 step 的 cost 上，放在该 step 的最后一个 token 上
+    3. 在该 step 内部，用 TD-error 传播回该 step 的每个 token 计算 GAE
+    
+    Args:
+        token_level_rewards: `(torch.Tensor)` shape: (bs, response_length)
+            每个 step 的 cost 已经放在对应 step 的最后一个 token 上
+        values: `(torch.Tensor)` shape: (bs, response_length)
+        gamma: `(float)` discounted factor
+        lambd: `(float)` lambda value for GAE
+        step_response_lengths: `(List[int])` 每个 step 的 response token 长度
+        logger: logger instance for debugging
+    
+    Returns:
+        advantages: `(torch.Tensor)` shape: (bs, response_length)
+        returns: `(torch.Tensor)` shape: (bs, response_length)
+    """
+    from roll.utils.logging import get_logger
+    if logger is None:
+        logger = get_logger()
+    
+    with torch.no_grad():
+        # 复制 token_level_rewards，避免修改原始数据
+        token_level_rewards = token_level_rewards.clone()
+        
+        batch_size = token_level_rewards.shape[0]
+        seq_len = token_level_rewards.shape[1]
+        advantages = torch.zeros_like(token_level_rewards)
+        returns = torch.zeros_like(token_level_rewards)
+        
+        # 第一步：计算每个 step 的"未来 cost 的 TD-error 传播值"
+        # 从后往前遍历每个 step，计算后续 step 的 cost 通过 TD-error 传播到当前 step 的值
+        num_steps = len(step_response_lengths)
+        step_boundaries = []  # 每个 step 的 [start_idx, end_idx]
+        current_idx = 0
+        for step_len in step_response_lengths:
+            if step_len > 0:
+                start_idx = current_idx
+                end_idx = current_idx + step_len - 1
+                # 确保索引在有效范围内
+                if end_idx < seq_len:
+                    step_boundaries.append((start_idx, end_idx))
+                else:
+                    # 超出范围，截断到有效范围
+                    step_boundaries.append((start_idx, seq_len - 1))
+                current_idx += step_len
+            else:
+                step_boundaries.append((current_idx, current_idx - 1))  # 空 step
+        
+        # 计算每个 step 的最后一个 token 位置上的"未来 cost 传播值"
+        # 从最后一个 step 开始，向前传播
+        future_cost_values = torch.zeros(batch_size, num_steps, device=token_level_rewards.device)
+        
+        for step_idx in reversed(range(num_steps)):
+            start_idx, end_idx = step_boundaries[step_idx]
+            if end_idx < start_idx:  # 空 step
+                continue
+            
+            # 当前 step 的最后一个 token 位置
+            step_last_token_idx = end_idx
+            
+            # 当前 step 的 cost（已经在 token_level_rewards 中）
+            current_step_cost = token_level_rewards[:, step_last_token_idx].clone()
+            
+            # 计算后续 step 的 cost 通过 TD-error 传播到当前 step 的值
+            if step_idx < num_steps - 1:
+                # 下一个 step 的最后一个 token 位置
+                next_start_idx, next_end_idx = step_boundaries[step_idx + 1]
+                if next_end_idx >= next_start_idx:
+                    next_step_last_token_idx = next_end_idx
+                    # 下一个 step 的 cost + 下一个 step 的未来传播值
+                    next_step_cost = token_level_rewards[:, next_step_last_token_idx]
+                    next_step_future_value = future_cost_values[:, step_idx + 1]
+                    # TD-error 传播：gamma * (next_cost + next_future_value)
+                    future_cost_values[:, step_idx] = gamma * (next_step_cost + next_step_future_value)
+            
+            # 将未来 cost 传播值加到当前 step 的 cost 上
+            # 更新 token_level_rewards 中该 step 最后一个 token 的值
+            token_level_rewards[:, step_last_token_idx] = current_step_cost + future_cost_values[:, step_idx]
+            
+            if logger:
+                logger.debug(
+                    f"[compute_step_level_gae] Step {step_idx}: "
+                    f"current_cost={current_step_cost.mean().item():.4f}, "
+                    f"future_value={future_cost_values[:, step_idx].mean().item():.4f}, "
+                    f"total_cost={token_level_rewards[:, step_last_token_idx].mean().item():.4f}"
+                )
+        
+        # 第二步：在每个 step 内部计算 GAE
+        for step_idx in range(num_steps):
+            start_idx, end_idx = step_boundaries[step_idx]
+            if end_idx < start_idx:  # 空 step
+                continue
+            
+            step_len = end_idx - start_idx + 1
+            if step_len <= 0:
+                continue
+            
+            # 提取该 step 的 rewards 和 values
+            step_rewards = token_level_rewards[:, start_idx:end_idx + 1]
+            step_values = values[:, start_idx:end_idx + 1]
+            
+            # 在该 step 内部计算 GAE（从后往前）
+            lastgaelam = 0
+            step_advantages_reversed = []
+            
+            for t_local in reversed(range(step_len)):
+                # 如果是 step 的最后一个 token，nextvalues 是 0（因为未来 cost 已经加到当前 cost 上了）
+                # 否则，nextvalues 是下一个 token 的 value
+                if t_local < step_len - 1:
+                    nextvalues = step_values[:, t_local + 1]
+                else:
+                    # step 的最后一个 token，未来 cost 已经加到 reward 上了，所以 nextvalues = 0
+                    nextvalues = torch.zeros_like(step_values[:, t_local])
+                
+                delta = step_rewards[:, t_local] + gamma * nextvalues - step_values[:, t_local]
+                lastgaelam = delta + gamma * lambd * lastgaelam
+                step_advantages_reversed.append(lastgaelam)
+            
+            step_advantages = torch.stack(step_advantages_reversed[::-1], dim=1)
+            step_returns = step_advantages + step_values
+            
+            # 将结果写回
+            advantages[:, start_idx:end_idx + 1] = step_advantages
+            returns[:, start_idx:end_idx + 1] = step_returns
+            
+            if logger:
+                logger.debug(
+                    f"[compute_step_level_gae] Step {step_idx} GAE完成: "
+                    f"start={start_idx}, end={end_idx}, "
+                    f"adv_mean={step_advantages.mean().item():.4f}, "
+                    f"ret_mean={step_returns.mean().item():.4f}"
+                )
+    
+    return advantages, returns
+
+
 def expand_to_token_level(data: "DataProto"):
     response_level_rewards = data.batch["response_level_rewards"].clone().detach()
     batch_size = data.batch.batch_size[0]
@@ -753,82 +902,154 @@ def compute_advantage(
         returns_key = "cost_returns"
         raw_advantages_key = "raw_cost_advantages"
         
-        # 如果没有token_level_costs，需要从episode_costs扩展
+        # 如果没有token_level_costs，需要从step_costs扩展（改进：使用step-level cost而非episode-level cost）
         if token_level_key not in data.batch:
-            logger.info(f"[DEBUG] [{mode_str}] 开始从episode_costs扩展为token_level_costs...")
+            logger.info(f"[DEBUG] [{mode_str}] 开始从step_costs扩展为token_level_costs（step-level分配）...")
             step_start = time.time()
-            # 从episode_costs扩展为token_level_costs（类似expand_to_token_level的逻辑）
-            if "episode_costs" in data.non_tensor_batch:
-                # 处理dtype=object的numpy数组：先转换为列表，再转换为tensor
+            # 优先使用step_costs（每个step的cost），而不是episode_costs（累加的cost）
+            if "step_costs" in data.non_tensor_batch and "step_response_lengths" in data.non_tensor_batch:
+                # 从step_costs和step_response_lengths构造token_level_costs
+                step_costs_raw = data.non_tensor_batch["step_costs"]
+                step_response_lengths_raw = data.non_tensor_batch["step_response_lengths"]
+                
+                # 处理step_costs：转换为列表
+                # step_costs_raw是np.array([costs], dtype=object)，其中costs是列表[cost1, cost2, ...]
+                if isinstance(step_costs_raw, np.ndarray) and step_costs_raw.dtype == object:
+                    if len(step_costs_raw) > 0:
+                        first_item = step_costs_raw[0]  # 取第一个batch的step_costs列表
+                        if isinstance(first_item, (list, tuple, np.ndarray)):
+                            step_costs = [float(x) for x in (first_item.tolist() if isinstance(first_item, np.ndarray) else list(first_item))]
+                        else:
+                            step_costs = [float(first_item)]
+                    else:
+                        step_costs = []
+                else:
+                    step_costs = [float(x) for x in np.array(step_costs_raw).flatten()] if len(step_costs_raw) > 0 else []
+                
+                # 处理step_response_lengths：转换为列表
+                # step_response_lengths_raw是np.array([lengths], dtype=object)，其中lengths是列表[len1, len2, ...]
+                if isinstance(step_response_lengths_raw, np.ndarray) and step_response_lengths_raw.dtype == object:
+                    if len(step_response_lengths_raw) > 0:
+                        first_item = step_response_lengths_raw[0]  # 取第一个batch的step_response_lengths列表
+                        if isinstance(first_item, (list, tuple, np.ndarray)):
+                            step_response_lengths = [int(x) for x in (first_item.tolist() if isinstance(first_item, np.ndarray) else list(first_item))]
+                        else:
+                            step_response_lengths = [int(first_item)]
+                    else:
+                        step_response_lengths = []
+                else:
+                    step_response_lengths = [int(x) for x in np.array(step_response_lengths_raw).flatten()] if len(step_response_lengths_raw) > 0 else []
+                
+                logger.info(f"[DEBUG] [{mode_str}] step_costs: {step_costs}, step_response_lengths: {step_response_lengths}")
+                
+                # 验证step_costs和step_response_lengths长度一致
+                if len(step_costs) != len(step_response_lengths):
+                    logger.warning(
+                        f"[DEBUG] [{mode_str}] step_costs长度({len(step_costs)})与step_response_lengths长度({len(step_response_lengths)})不一致，"
+                        f"使用fallback方案（episode_costs）"
+                    )
+                    step_costs = []
+                    step_response_lengths = []
+                
+                # 构造token_level_costs：将每个step的cost放在对应step的最后一个token上
+                batch_size = response_mask.shape[0]
+                token_level_costs = torch.zeros_like(response_mask, dtype=torch.float32)
+                
+                if len(step_costs) > 0 and len(step_response_lengths) > 0:
+                    # 计算每个step的最后一个token位置（在response_mask中的索引）
+                    current_idx = 0
+                    for step_idx, (step_cost, step_len) in enumerate(zip(step_costs, step_response_lengths)):
+                        if step_len > 0:
+                            # 当前step的最后一个token位置（在response中的索引，从0开始）
+                            step_last_token_idx = current_idx + step_len - 1
+                            # 确保索引在有效范围内
+                            if step_last_token_idx < response_mask.shape[1]:
+                                # 将step_cost放在该step的最后一个token上（对所有batch样本）
+                                token_level_costs[:, step_last_token_idx] = float(step_cost)
+                                logger.debug(
+                                    f"[DEBUG] [{mode_str}] Step {step_idx}: cost={step_cost:.4f} "
+                                    f"放在token位置 {step_last_token_idx} (step_len={step_len})"
+                                )
+                            else:
+                                logger.warning(
+                                    f"[DEBUG] [{mode_str}] Step {step_idx}的最后一个token位置 {step_last_token_idx} "
+                                    f"超出response_mask长度 {response_mask.shape[1]}"
+                                )
+                        current_idx += step_len
+                    
+                    logger.info(
+                        f"[DEBUG] [{mode_str}] token_level_costs构造完成（将使用step-level GAE）: "
+                        f"shape={token_level_costs.shape}, mean={token_level_costs.mean().item():.6f}, "
+                        f"sum={token_level_costs.sum().item():.6f}, 非零位置数={(token_level_costs != 0).sum().item()}"
+                    )
+                else:
+                    # Fallback: 如果step_costs不可用，使用episode_costs（向后兼容）
+                    logger.warning(f"[DEBUG] [{mode_str}] step_costs不可用，使用fallback方案（episode_costs）")
+                    if "episode_costs" in data.non_tensor_batch:
+                        episode_costs_raw = data.non_tensor_batch["episode_costs"]
+                        if isinstance(episode_costs_raw, np.ndarray) and episode_costs_raw.dtype == object:
+                            episode_costs_list = []
+                            for item in episode_costs_raw:
+                                if isinstance(item, (list, tuple)):
+                                    episode_costs_list.append(float(item[0]) if len(item) > 0 else 0.0)
+                                elif isinstance(item, np.ndarray):
+                                    episode_costs_list.append(float(item.item()) if item.size == 1 else float(item[0]))
+                                elif isinstance(item, (int, float, np.number)):
+                                    episode_costs_list.append(float(item))
+                                else:
+                                    episode_costs_list.append(float(item))
+                            episode_costs = torch.tensor(episode_costs_list, dtype=torch.float32, device=response_mask.device)
+                        else:
+                            try:
+                                episode_costs = torch.tensor(episode_costs_raw, dtype=torch.float32, device=response_mask.device)
+                            except (TypeError, ValueError):
+                                episode_costs_list = [float(x) for x in np.array(episode_costs_raw).flatten()]
+                                episode_costs = torch.tensor(episode_costs_list, dtype=torch.float32, device=response_mask.device)
+                        
+                        # Fallback: 将cost放在最后一个非padding位置
+                        last_valid_idx = (response_mask.sum(dim=1) - 1).long().clamp(min=0)
+                        token_level_costs[torch.arange(batch_size), last_valid_idx] = episode_costs.squeeze(-1) if episode_costs.dim() > 1 else episode_costs
+                    else:
+                        raise ValueError(
+                            "cost_mode=True requires 'step_costs' and 'step_response_lengths' in data.non_tensor_batch "
+                            "or 'episode_costs' in data.non_tensor_batch "
+                            "or 'token_level_costs' in data.batch"
+                        )
+                
+                data.batch[token_level_key] = token_level_costs
+                logger.info(f"[DEBUG] [{mode_str}] step_costs扩展总耗时: {time.time() - step_start:.3f}秒")
+            elif "episode_costs" in data.non_tensor_batch:
+                # Fallback: 如果step_costs不可用，使用旧的episode_costs方式（向后兼容）
+                logger.warning(f"[DEBUG] [{mode_str}] step_costs或step_response_lengths不可用，使用fallback方案（episode_costs）")
                 episode_costs_raw = data.non_tensor_batch["episode_costs"]
-                logger.info(f"[DEBUG] [{mode_str}] episode_costs_raw类型: {type(episode_costs_raw)}, dtype={getattr(episode_costs_raw, 'dtype', 'N/A')}, shape={getattr(episode_costs_raw, 'shape', 'N/A')}")
                 if isinstance(episode_costs_raw, np.ndarray) and episode_costs_raw.dtype == object:
-                    # 如果是object类型数组，需要先转换为数值列表
                     episode_costs_list = []
                     for item in episode_costs_raw:
                         if isinstance(item, (list, tuple)):
-                            # 如果是列表或元组，取第一个元素
                             episode_costs_list.append(float(item[0]) if len(item) > 0 else 0.0)
                         elif isinstance(item, np.ndarray):
-                            # 如果是numpy数组，转换为标量
                             episode_costs_list.append(float(item.item()) if item.size == 1 else float(item[0]))
                         elif isinstance(item, (int, float, np.number)):
-                            # 如果是数值类型，直接转换
                             episode_costs_list.append(float(item))
                         else:
-                            # 其他情况，尝试转换为浮点数
                             episode_costs_list.append(float(item))
-
-                    episode_costs = torch.tensor(
-                        episode_costs_list,
-                        dtype=torch.float32,
-                        device=response_mask.device,
-                    )
+                    episode_costs = torch.tensor(episode_costs_list, dtype=torch.float32, device=response_mask.device)
                 else:
-                    # 尝试直接转换，如果失败则使用列表方式
                     try:
-                        episode_costs = torch.tensor(
-                            episode_costs_raw,
-                            dtype=torch.float32,
-                            device=response_mask.device,
-                        )
+                        episode_costs = torch.tensor(episode_costs_raw, dtype=torch.float32, device=response_mask.device)
                     except (TypeError, ValueError):
-                        # 如果转换失败，使用列表方式
                         episode_costs_list = [float(x) for x in np.array(episode_costs_raw).flatten()]
-                        episode_costs = torch.tensor(
-                            episode_costs_list,
-                            dtype=torch.float32,
-                            device=response_mask.device,
-                        )
-                # 扩展为token级别（只在最后一个token位置有cost）
-                logger.info(f"[DEBUG] [{mode_str}] episode_costs转换完成: shape={episode_costs.shape}, mean={episode_costs.mean().item():.6f}, sum={episode_costs.sum().item():.6f}")
-                logger.info(f"[DEBUG] [{mode_str}] 开始扩展为token级别costs...")
-                expand_start = time.time()
+                        episode_costs = torch.tensor(episode_costs_list, dtype=torch.float32, device=response_mask.device)
+                
                 batch_size = response_mask.shape[0]
                 token_level_costs = torch.zeros_like(response_mask, dtype=torch.float32)
-                # 找到每个序列的最后一个有效位置（类似eos位置）
-                position_ids = data.batch.get("position_ids", None)
-                logger.info(f"[DEBUG] [{mode_str}] position_ids存在: {position_ids is not None}")
-                if position_ids is not None:
-                    if position_ids.dim() == 3:
-                        position_ids = position_ids[:, 0]  # 取第一维（文本）
-                    attention_mask = data.batch["attention_mask"]
-                    eos_mask_idx = torch.argmax(position_ids * attention_mask, dim=-1)
-                    # 调整索引：response_mask是去掉prompt后的，所以需要减去prompt长度
-                    prompt_length = attention_mask.shape[1] - response_mask.shape[1]
-                    response_eos_idx = torch.clamp(eos_mask_idx - prompt_length, min=0, max=response_mask.shape[1] - 1)
-                    token_level_costs[torch.arange(batch_size), response_eos_idx] = episode_costs.squeeze(-1) if episode_costs.dim() > 1 else episode_costs
-                else:
-                    # Fallback: 将cost放在最后一个非padding位置
-                    last_valid_idx = (response_mask.sum(dim=1) - 1).long().clamp(min=0)
-                    token_level_costs[torch.arange(batch_size), last_valid_idx] = episode_costs.squeeze(-1) if episode_costs.dim() > 1 else episode_costs
-                logger.info(f"[DEBUG] [{mode_str}] token级别costs扩展完成，耗时: {time.time() - expand_start:.3f}秒")
-                logger.info(f"[DEBUG] [{mode_str}] token_level_costs: shape={token_level_costs.shape}, mean={token_level_costs.mean().item():.6f}, sum={token_level_costs.sum().item():.6f}")
+                last_valid_idx = (response_mask.sum(dim=1) - 1).long().clamp(min=0)
+                token_level_costs[torch.arange(batch_size), last_valid_idx] = episode_costs.squeeze(-1) if episode_costs.dim() > 1 else episode_costs
                 data.batch[token_level_key] = token_level_costs
-                logger.info(f"[DEBUG] [{mode_str}] episode_costs扩展总耗时: {time.time() - step_start:.3f}秒")
             else:
                 raise ValueError(
-                    "cost_mode=True requires 'episode_costs' in data.non_tensor_batch "
+                    "cost_mode=True requires 'step_costs' and 'step_response_lengths' in data.non_tensor_batch "
+                    "or 'episode_costs' in data.non_tensor_batch "
                     "or 'token_level_costs' in data.batch"
                 )
     else:
@@ -862,10 +1083,46 @@ def compute_advantage(
         values = data.batch[values_key].float()
         logger.info(f"[DEBUG] [{mode_str}] values: shape={values.shape}, mean={values.mean().item():.6f}, sum={values.sum().item():.6f}")
         data.batch[values_key] = values * response_mask
-        advantages, returns = compute_gae_advantage_return(
-            token_level_rewards=token_level_rewards, values=values, gamma=gamma, lambd=lambd
-        )
-        logger.info(f"[DEBUG] [{mode_str}] GAE计算完成，耗时: {time.time() - gae_start:.3f}秒")
+        
+        # 检查是否使用 step-level GAE（cost_mode 且使用了 step_costs）
+        use_step_level_gae = False
+        step_response_lengths_for_gae = None
+        if cost_mode and "step_costs" in data.non_tensor_batch and "step_response_lengths" in data.non_tensor_batch:
+            step_response_lengths_raw = data.non_tensor_batch["step_response_lengths"]
+            # 解析 step_response_lengths
+            if isinstance(step_response_lengths_raw, np.ndarray) and step_response_lengths_raw.dtype == object:
+                if len(step_response_lengths_raw) > 0:
+                    first_item = step_response_lengths_raw[0]
+                    if isinstance(first_item, (list, tuple, np.ndarray)):
+                        step_response_lengths_for_gae = [int(x) for x in (first_item.tolist() if isinstance(first_item, np.ndarray) else list(first_item))]
+                    else:
+                        step_response_lengths_for_gae = [int(first_item)]
+                else:
+                    step_response_lengths_for_gae = []
+            else:
+                step_response_lengths_for_gae = [int(x) for x in np.array(step_response_lengths_raw).flatten()] if len(step_response_lengths_raw) > 0 else []
+            
+            if len(step_response_lengths_for_gae) > 0:
+                use_step_level_gae = True
+                logger.info(f"[DEBUG] [{mode_str}] 使用step-level GAE计算（step数量={len(step_response_lengths_for_gae)}）...")
+        
+        if use_step_level_gae:
+            # 使用 step-level GAE：每个 step 的 cost 单独用来优化本轮的 token
+            advantages, returns = compute_step_level_gae_advantage_return(
+                token_level_rewards=token_level_rewards,
+                values=values,
+                gamma=gamma,
+                lambd=lambd,
+                step_response_lengths=step_response_lengths_for_gae,
+                logger=logger
+            )
+            logger.info(f"[DEBUG] [{mode_str}] Step-level GAE计算完成，耗时: {time.time() - gae_start:.3f}秒")
+        else:
+            # 使用标准的 trajectory-level GAE（原有逻辑）
+            advantages, returns = compute_gae_advantage_return(
+                token_level_rewards=token_level_rewards, values=values, gamma=gamma, lambd=lambd
+            )
+            logger.info(f"[DEBUG] [{mode_str}] Trajectory-level GAE计算完成，耗时: {time.time() - gae_start:.3f}秒")
     elif adv_estimator in ["reinforce", "grpo", "gigpo", "step_reinforce"]:
         advantages, returns = compute_reinforce_return(
             token_level_rewards=token_level_rewards, gamma=gamma, lambd=lambd

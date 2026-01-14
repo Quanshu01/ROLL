@@ -40,7 +40,7 @@ checkpoint_config:
 
 num_gpus_per_node: 5
 
-max_steps: 100
+max_steps: 10
 save_steps: 50
 logging_steps: 1
 eval_steps: 1
@@ -48,7 +48,7 @@ resume_from_checkpoint: false
 
 rollout_batch_size: 1
 val_batch_size: 1
-sequence_length: 4096
+sequence_length: 8192  # 从32768减小到8192，实际response_length约303，足够使用
 
 advantage_clip: 0.2
 ppo_epochs: 1
@@ -135,7 +135,7 @@ actor_infer:
       block_size: 16
       load_format: auto
       enforce_eager: true
-      max_model_len: 4096
+      max_model_len: 8192  # 从32768减小到8192，与sequence_length保持一致
   device_mapping: "[2,3]"
   world_size: 1
 
@@ -229,7 +229,7 @@ max_tokens_per_step: 512
 custom_envs:
   OSWorld:
     env_type: osworld
-    max_steps: 20
+    max_steps: 5
     max_tokens_per_step: 128
     env_manager_cls: ${env_manager_cls}
     use_thread_lock: true

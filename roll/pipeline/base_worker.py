@@ -726,9 +726,60 @@ class ConstrainedActorWorker(ActorWorker):
 class ConstrainedCriticWorker(CriticWorker):
     """
     Critic worker for cost signals. Expects cost_values/cost_returns in batch.
+    如果 batch 中包含 cost_input_ids（包含额外观测的 input_ids），则使用它们；否则使用普通的 input_ids。
     """
 
+    def _prepare_cost_data(self, data: DataProto) -> DataProto:
+        """
+        准备 cost critic 的数据：如果存在 cost_input_ids，则使用它们替换 input_ids。
+        """
+        if "cost_input_ids" in data.batch:
+            # cost_input_ids 已经包含了原始观测和额外观测（在 formulate_rollouts 中构建时已拼接）
+            # 所以直接替换 input_ids 即可，不会丢失原始观测
+            cost_data = DataProto()
+            cost_data.batch = data.batch.copy()
+            cost_data.non_tensor_batch = data.non_tensor_batch.copy()
+            cost_data.meta_info = data.meta_info.copy()
+            
+            # 替换 input_ids 相关的字段（cost_input_ids 已包含原始观测+额外观测）
+            cost_data.batch["input_ids"] = cost_data.batch["cost_input_ids"]
+            if "cost_attention_mask" in cost_data.batch:
+                cost_data.batch["attention_mask"] = cost_data.batch["cost_attention_mask"]
+            if "cost_position_ids" in cost_data.batch:
+                cost_data.batch["position_ids"] = cost_data.batch["cost_position_ids"]
+            if "cost_response_mask" in cost_data.batch:
+                cost_data.batch["response_mask"] = cost_data.batch["cost_response_mask"]
+            if "cost_prompt_mask" in cost_data.batch:
+                cost_data.batch["prompt_mask"] = cost_data.batch["cost_prompt_mask"]
+            
+            return cost_data
+        else:
+            # 降级方案：使用普通的 input_ids（不包含额外观测）
+            return data
+
+    @register(dispatch_mode=Dispatch.DP_MP_COMPUTE)
+    def compute_values(self, data: DataProto):
+        """
+        return DataProto.from_dict(tensors={'values': values})
+        如果存在 cost_input_ids，使用包含额外观测的数据。
+        """
+        # 准备数据：使用 cost_input_ids（如果存在）
+        cost_data = self._prepare_cost_data(data)
+        return super().compute_values(cost_data)
+
+    @register(dispatch_mode=Dispatch.DP_MP_COMPUTE)
+    def train_step(self, data: DataProto):
+        """
+        return DataProto(meta_info={'metrics': metrics})
+        如果存在 cost_input_ids，使用包含额外观测的数据。
+        """
+        # 准备数据：使用 cost_input_ids（如果存在）
+        cost_data = self._prepare_cost_data(data)
+        return super().train_step(cost_data)
+
     def loss_func(self, data: DataProto, output_tensor: torch.Tensor):
+        # 注意：loss_func 被 train_step 调用，此时 data 已经被 _prepare_cost_data 处理过
+        # _prepare_cost_data 已经将 cost_response_mask 复制到 response_mask 中了
         response_mask = data.batch["response_mask"][:, 1:]
 
         if "cost_values" not in data.batch or "cost_returns" not in data.batch:

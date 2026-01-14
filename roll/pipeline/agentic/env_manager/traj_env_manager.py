@@ -56,6 +56,12 @@ except ImportError as e:
     logger = logging.getLogger(__name__)
     logger.debug(f"Failed to import RuleBasedEvaluator: {e}")
 
+# 导入额外观测收集器（封装了所有 OSWorld-dev 相关逻辑）
+from roll.pipeline.agentic.env_manager.extra_observation_collector import (
+    ExtraObservationCollector,
+    format_extra_observations
+)
+
 # Import llm_judge function from OSWorld-dev (same as lib_run_single.py)
 llm_judge_task_completion = None
 try:
@@ -174,6 +180,16 @@ class TrajEnvManager(BaseEnvManager):
             lm_output = self.make_decision(rollout_cache)
             stop_reason = lm_output.meta_info.pop("stop_reason")
 
+            # 如果 LLM 生成失败（例如推理引擎超时或崩溃），直接结束本 episode，
+            # 否则会因为 stop_reason 既不是 FINISH 也不是 MAX_LENGTH 而陷入死循环。
+            if stop_reason == GenerateStopReason.ABORT:
+                self.logger.error(
+                    "[run_rollout_loop] LLM generation aborted "
+                    "(possibly due to timeout or inference engine failure). "
+                    "Stopping current rollout to avoid hanging."
+                )
+                break
+
             # 2. 执行步骤
             if stop_reason == GenerateStopReason.FINISH:
                 rollout_cache = self.step(lm_output)
@@ -196,7 +212,6 @@ class TrajEnvManager(BaseEnvManager):
                 )
                 try:
                     put_ref = self.output_queue.put.remote(self.env_config['group_id'], self.episode_id, start_step, rollout)
-                    import ray
                     result = ray.get(put_ref, timeout=120.0)  # 120秒超时
                     self.logger.info(f"[formulate_rollouts] Successfully put rollout to queue")
                 except ray.exceptions.GetTimeoutError:
@@ -304,19 +319,28 @@ class TrajEnvManager(BaseEnvManager):
         # 5. 评估：仅使用 Linux Pytest 体系计算 reward / cost
         self._run_linux_pytest_evaluator()
 
-        # 6. 打印日志（在评估器运行后，显示更新后的reward和cost）
+        # 6. 收集额外观测（用于cost critic）
+        # 注意：额外观测是在执行完 pytest 后收集的，保存到当前步骤的 history_item 中
+        # 这样在下一步的 format_messages 中，可以读取当前步骤的额外观测并拼接到 prompt 中
+        self._collect_extra_observations(history_item)
+
+        # 7. 打印日志（在评估器运行后，显示更新后的reward和cost）
         self.logger.info(
             f"[Step {self.rollout_cache.step}] ENV STEP RESULT:\n"
             f"Reward: {history_item.get('reward', 0)}, Cost: {history_item.get('cost', 0)}, Done={terminated}\n"
             f"Observation preview: {str(observation)[:2000]}\n"
         )
 
-        # 7. 准备下一步
-        self.rollout_cache.history.append({
+        # 8. 准备下一步
+        # 注意：额外观测已保存到当前步骤的 history_item 中（第310行）
+        # 在下一步的 format_messages() 中，history[-1] 是新步骤，history[-2] 是当前步骤
+        # 所以 format_messages() 需要使用 history[-2] 来读取上一步（当前步骤）的额外观测
+        next_history_item = {
             "observation": observation,
             "actions_left": self.env_config.max_steps - self.rollout_cache.step,
             "messages": None
-        })
+        }
+        self.rollout_cache.history.append(next_history_item)
         return self.rollout_cache
 
     def _normalize_env_result(self, raw_res):
@@ -509,6 +533,39 @@ class TrajEnvManager(BaseEnvManager):
             self.logger.warning(f"Failed to write manifests from config: {e}")
             import traceback
             self.logger.debug(traceback.format_exc())
+
+    def _collect_extra_observations(self, history_item: Dict[str, Any]):
+        """
+        收集额外观测数据，用于 cost critic。
+        
+        使用 ExtraObservationCollector 来封装所有 OSWorld-dev 相关的逻辑，
+        保持代码简洁和模块化。
+        
+        Args:
+            history_item: 当前步骤的 history 项，用于存储额外观测
+        """
+        step_num = self.rollout_cache.step
+        
+        # 获取 pytest 结果目录
+            result_dir = self._pytest_task_result_dir
+            if not result_dir or not result_dir.exists():
+                history_item['extra_observations'] = {}
+                return
+            
+        # 使用收集器收集额外观测（所有 OSWorld-dev 相关逻辑都在收集器中）
+        collector = ExtraObservationCollector(result_dir=result_dir, logger=self.logger)
+        extra_obs = collector.collect(step_num=step_num)
+            
+            # 保存到 history_item
+            history_item['extra_observations'] = extra_obs
+            
+            if extra_obs:
+                self.logger.info(
+                f"[Step {step_num}] [_collect_extra_observations] ✓ 收集完成: {len(extra_obs)} 个额外观测 "
+                    f"(keys: {list(extra_obs.keys())})"
+                )
+            else:
+            self.logger.debug(f"[Step {step_num}] [_collect_extra_observations] 未找到额外观测")
 
     def _run_linux_pytest_evaluator(self):
         """
@@ -799,6 +856,10 @@ class TrajEnvManager(BaseEnvManager):
                 render_dict["turn_idx"] = self.rollout_cache.step + 1
             
             user_content += self.agent_template.format(**render_dict)
+            
+            # 注意：额外观测不再在 format_messages 中添加，仅在 formulate_rollouts 中为 cost critic 构建时使用
+            # 这样可以避免额外观测影响 actor 的响应生成
+            
             messages.append({"role": "user", "content": user_content})
 
             if len(self.rollout_cache.history) > 1:
@@ -972,9 +1033,33 @@ class TrajEnvManager(BaseEnvManager):
                 if isinstance(eval_score, (int, float)): ep_score = float(eval_score)
             except Exception: pass
 
+        # 统计额外观测的使用情况
+        extra_obs_stats = {
+            "total_steps": len(history),
+            "steps_with_extra_obs": 0,
+            "steps_without_extra_obs": 0,
+            "extra_obs_keys": set()
+        }
+        for idx, item in enumerate(history):
+            extra_obs = item.get("extra_observations", {})
+            if extra_obs:
+                extra_obs_stats["steps_with_extra_obs"] += 1
+                extra_obs_stats["extra_obs_keys"].update(extra_obs.keys())
+            else:
+                extra_obs_stats["steps_without_extra_obs"] += 1
+        
+        self.logger.info(
+            f"[formulate_rollouts] 额外观测统计: "
+            f"总步数={extra_obs_stats['total_steps']}, "
+            f"有额外观测={extra_obs_stats['steps_with_extra_obs']}步, "
+            f"无额外观测={extra_obs_stats['steps_without_extra_obs']}步, "
+            f"观测类型={list(extra_obs_stats['extra_obs_keys'])}"
+        )
+        
         all_ids = []
         prompt_masks = []
         response_masks = []
+        step_response_lengths = []  # 记录每个step的response长度，用于step-level cost分配
         
         for item in history:
             p = self._coerce_ids(item.get("prompt_ids"))
@@ -982,6 +1067,14 @@ class TrajEnvManager(BaseEnvManager):
             all_ids.extend(p + r)
             prompt_masks.extend([1] * len(p) + [0] * len(r))
             response_masks.extend([0] * len(p) + [1] * len(r))
+            step_response_lengths.append(len(r))  # 记录当前step的response长度
+        
+        self.logger.info(
+            f"[formulate_rollouts] Prompt 构造完成: "
+            f"总token数={len(all_ids)}, "
+            f"prompt tokens={sum(prompt_masks)}, "
+            f"response tokens={sum(response_masks)}"
+        )
         
         seq_len = self.pipeline_config.sequence_length
         input_tensor = pad_to_length(torch.tensor(all_ids).unsqueeze(0), seq_len, self.tokenizer.pad_token_id)
@@ -1018,6 +1111,73 @@ class TrajEnvManager(BaseEnvManager):
             f"ep_score={ep_score:.4f}, ep_cost={ep_cost:.4f}, cost_coef={cost_coef:.4f}, "
             f"response_level={response_level:.4f} (R = {ep_score:.4f} - {cost_coef:.4f} * {ep_cost:.4f})"
         )
+        
+        # 为 cost critic 构建包含额外观测的 input_ids（仅在启用 cost_constraint 时）
+        if getattr(self.pipeline_config, 'enable_cost_constraint', False):
+            try:
+                cost_critic_all_ids = self._build_cost_critic_prompt_ids_with_extra_obs(history, rollout_cache)
+                cost_input_tensor = pad_to_length(torch.tensor(cost_critic_all_ids).unsqueeze(0), seq_len, self.tokenizer.pad_token_id)
+                cost_att_mask = pad_to_length(torch.ones(1, len(cost_critic_all_ids)), seq_len, 0)
+                cost_pos_ids = pad_to_length(cost_att_mask.cumsum(dim=-1), seq_len, 0)
+                
+                # 计算 cost critic 的 prompt_mask 和 response_mask
+                # 使用与 _build_cost_critic_prompt_ids_with_extra_obs 相同的逻辑来计算每个 step 的长度
+                cost_prompt_masks = []
+                cost_response_masks = []
+                
+                for idx, item in enumerate(history):
+                    item_messages = item.get("messages", [])
+                    
+                    if not item_messages:
+                        # 降级方案：使用原始的 prompt_ids 长度
+                        p_len = len(self._coerce_ids(item.get("prompt_ids")))
+                    else:
+                        # 获取上一步的额外观测
+                        extra_obs = {}
+                        if idx > 0:
+                            prev_item = history[idx - 1]
+                            extra_obs = prev_item.get("extra_observations", {})
+                        
+                        # 使用辅助方法构建包含额外观测的 messages（与 _build_cost_critic_prompt_ids_with_extra_obs 保持一致）
+                        messages_with_extra = self._build_messages_with_extra_obs(item_messages, extra_obs, idx)
+                        
+                        prompt_ids_with_extra = custom_apply_chat_template(
+                            messages=messages_with_extra, 
+                            tokenizer=self.tokenizer, 
+                            add_generation_prompt=True
+                        )
+                        
+                        # 如果有历史，需要添加 conversation end token
+                        if idx > 0:
+                            prompt_ids_with_extra = compute_conversation_end_token_id(self.tokenizer) + prompt_ids_with_extra
+                        
+                        p_len = len(prompt_ids_with_extra)
+                    
+                    r_len = len(self._coerce_ids(item.get("response_ids")))
+                    cost_prompt_masks.extend([1] * p_len + [0] * r_len)
+                    cost_response_masks.extend([0] * p_len + [1] * r_len)
+                
+                cost_resp_mask = pad_to_length(torch.tensor(cost_response_masks).unsqueeze(0), seq_len, 0)
+                cost_prm_mask = pad_to_length(torch.tensor(cost_prompt_masks).unsqueeze(0), seq_len, 0)
+                
+                # 将 cost critic 的 input_ids 添加到 batch 中
+                lm_input.batch["cost_input_ids"] = cost_input_tensor
+                lm_input.batch["cost_attention_mask"] = cost_att_mask
+                lm_input.batch["cost_position_ids"] = cost_pos_ids
+                lm_input.batch["cost_response_mask"] = cost_resp_mask
+                lm_input.batch["cost_prompt_mask"] = cost_prm_mask
+                
+                self.logger.info(
+                    f"[formulate_rollouts] 为 cost critic 构建了包含额外观测的 input_ids: "
+                    f"总长度={len(cost_critic_all_ids)} tokens"
+                )
+            except Exception as e:
+                self.logger.warning(
+                    f"[formulate_rollouts] 构建 cost critic 额外观测 input_ids 失败: {e}, "
+                    f"cost critic 将使用原始 input_ids"
+                )
+                import traceback
+                self.logger.debug(traceback.format_exc())
 
         # 补全 non_tensor_batch (解决 KeyError: step_scores)
         lm_input.non_tensor_batch.update({
@@ -1027,7 +1187,8 @@ class TrajEnvManager(BaseEnvManager):
             "episode_scores": np.array([ep_score], dtype=object),
             "episode_costs": np.array([ep_cost], dtype=object),
             "step_scores": np.array([scores], dtype=object),
-            "step_costs": np.array([costs], dtype=object),   
+            "step_costs": np.array([costs], dtype=object),
+            "step_response_lengths": np.array([step_response_lengths], dtype=object),  # 保存每个step的response长度，用于step-level cost分配
             "frames": np.array([rollout_cache.frames], dtype=object),
         })
 
@@ -1078,3 +1239,91 @@ class TrajEnvManager(BaseEnvManager):
 
     def _sanitize_obs_str(self, s: str) -> str:
         return re.sub(r"[\x00-\x08\x0B-\x1F\x7F]", "", str(s))
+    
+    def _build_messages_with_extra_obs(self, original_messages: List[Dict], extra_obs: Dict[str, Any], step_idx: int) -> List[Dict]:
+        """
+        为给定的 messages 添加额外观测信息。
+        
+        Args:
+            original_messages: 原始的 messages 列表
+            extra_obs: 额外观测字典
+            step_idx: 步骤索引（用于日志记录）
+            
+        Returns:
+            包含额外观测的 messages 列表
+        """
+        if not extra_obs:
+            return original_messages
+        
+        # 使用独立的格式化函数（不依赖类状态）
+        extra_obs_str = format_extra_observations(extra_obs)
+        if not extra_obs_str:
+            return original_messages
+        
+        messages_with_extra = []
+        for msg in original_messages:
+            if msg.get("role") == "user":
+                original_content = msg.get("content", "")
+                content_with_extra = original_content + "\n\n[额外观测信息（用于安全评估）]\n" + extra_obs_str
+                messages_with_extra.append({"role": "user", "content": content_with_extra})
+                self.logger.debug(
+                    f"[formulate_rollouts] Step {step_idx}: 为 cost critic 添加额外观测, "
+                    f"长度: {len(extra_obs_str)} 字符"
+                )
+            else:
+                messages_with_extra.append(msg)
+        
+        return messages_with_extra
+    
+    def _build_cost_critic_prompt_ids_with_extra_obs(self, history: List[Dict], rollout_cache: RolloutCache) -> List[int]:
+        """
+        为 cost critic 构建包含额外观测的 prompt_ids。
+        
+        Args:
+            history: rollout history，每个 item 包含 prompt_ids, response_ids, extra_observations 等
+            rollout_cache: rollout cache，用于获取 step 信息
+            
+        Returns:
+            包含额外观测的完整 input_ids 列表
+        """
+        all_ids = []
+        
+        for idx, item in enumerate(history):
+            # 获取原始的 messages（保存在 history 中）
+            original_messages = item.get("messages", [])
+            
+            # 如果没有 messages，使用原始的 prompt_ids（降级方案）
+            if not original_messages:
+                prompt_ids = self._coerce_ids(item.get("prompt_ids"))
+                all_ids.extend(prompt_ids)
+                response_ids = self._coerce_ids(item.get("response_ids"))
+                all_ids.extend(response_ids)
+                continue
+            
+            # 获取上一步的额外观测（用于当前 step）
+            extra_obs = {}
+            if idx > 0:
+                prev_item = history[idx - 1]
+                extra_obs = prev_item.get("extra_observations", {})
+            
+            # 使用辅助方法构建包含额外观测的 messages
+            messages_with_extra_obs = self._build_messages_with_extra_obs(original_messages, extra_obs, idx)
+            
+            # 使用包含额外观测的 messages 构建 prompt_ids
+            prompt_ids = custom_apply_chat_template(
+                messages=messages_with_extra_obs, 
+                tokenizer=self.tokenizer, 
+                add_generation_prompt=True
+            )
+            
+            # 如果有历史，需要添加 conversation end token
+            if idx > 0 and all_ids:
+                prompt_ids = compute_conversation_end_token_id(self.tokenizer) + prompt_ids
+            
+            all_ids.extend(prompt_ids)
+            
+            # 添加 response_ids
+            response_ids = self._coerce_ids(item.get("response_ids"))
+            all_ids.extend(response_ids)
+        
+        return all_ids

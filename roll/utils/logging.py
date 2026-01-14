@@ -73,6 +73,7 @@ def get_logger() -> logging.Logger:
     )
     _logger = logging.getLogger(_logger_name)
     _logger.setLevel(logging.INFO)
+    _logger.propagate = False
     stream_handler_exists = any(handler.get_name() == _logger_name for handler in _logger.handlers)
 
     if not stream_handler_exists:
