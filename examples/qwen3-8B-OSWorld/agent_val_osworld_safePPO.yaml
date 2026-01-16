@@ -48,11 +48,10 @@ resume_from_checkpoint: false
 
 rollout_batch_size: 1
 val_batch_size: 1
-sequence_length: 8192  # 与 vLLM max_model_len 保持一致
+sequence_length: 8192
 
 advantage_clip: 0.2
 ppo_epochs: 1
-# ============ 关键修改：必须使用 GAE 才能启用 Cost Constraint ============
 adv_estimator: "gae"
 init_kl_coef: 0.0
 whiten_advantages: false

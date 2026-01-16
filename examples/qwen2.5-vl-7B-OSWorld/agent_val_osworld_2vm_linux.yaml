@@ -46,7 +46,7 @@ eval_steps: 1
 resume_from_checkpoint: false
 
 rollout_batch_size: 1
-val_batch_size: 1
+val_batch_size: 2
 sequence_length: 4096
 
 advantage_clip: 0.2
@@ -98,7 +98,7 @@ actor_infer:
   strategy_args:
     strategy_name: vllm
     strategy_config:
-      gpu_memory_utilization: 0.4  # 从 0.1 增加到 0.4，确保有足够的 KV cache 内存
+      gpu_memory_utilization: 0.4
       tensor_parallel_size: 2
       block_size: 16
       load_format: auto
