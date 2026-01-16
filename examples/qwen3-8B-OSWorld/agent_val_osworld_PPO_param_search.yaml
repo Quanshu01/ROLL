@@ -1,0 +1,355 @@
+defaults:
+  - _self_
+  - ../config/traj_envs@_here_
+  - ../config/deepspeed_zero@_here_
+  - ../config/deepspeed_zero2@_here_
+  - ../config/deepspeed_zero3@_here_
+  - ../config/deepspeed_zero3_cpuoffload@_here_
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+
+# ============ PPO 参数验证实验 ============
+exp_name: "ppo_param_search_qwen3"
+seed: 42
+logging_dir: ./output/logs
+output_dir: ./output
+rollout_dump_dir: /data/share/projects/quanshu/ROLL/output/rollouts/agentic_pipeline_osworld
+render_save_dir: ./output/render
+system_envs:
+  USE_MODELSCOPE: '1'
+
+track_with: wandb
+tracker_kwargs:
+  api_key: 9b8c18ab54c4fb4d75f32410d7dcfaad7a921a10
+  project: roll-agentic
+  name: ${exp_name}
+  notes: "param_search_500samples"
+  tags:
+   - agentic
+   - roll
+   - osworld
+   - qwen3
+   - param_search
+
+checkpoint_config:
+  type: file_system
+  output_dir: ./output/data/cpfs_0/rl_examples/models/${exp_name}
+
+num_gpus_per_node: 8
+num_nodes: 1
+
+# ============ 参数验证核心配置 ============
+# 
+# ⚠️ 重要：以下参数需要根据实际 VM 数量调整！
+# 
+# 计算公式：
+#   - max_steps = 数据量 / rollout_batch_size × epoch数
+#   - 例：500条 / 20 × 2 = 50步
+#
+# VM利用率参考：
+#   | VM数量 | rollout_batch_size | val_batch_size | max_steps (500条, 2epoch) |
+#   |--------|-------------------|----------------|---------------------------|
+#   | 10     | 8                 | 2              | 125                       |
+#   | 20     | 16                | 4              | 63                        |
+#   | 30     | 20                | 6              | 50                        |
+#
+max_steps: 50                    # 500条/20 × 2 = 50步
+save_steps: 25                   # 每个epoch保存一次
+logging_steps: 5
+eval_steps: 25                   # epoch结束时验证
+resume_from_checkpoint: false
+
+# ============ Batch 配置 ============
+# ⚠️ 重要约束：
+#   1. rollout_batch_size = train_env_manager.num_env_groups
+#   2. val_batch_size = val_env_manager.num_env_groups  
+#   3. custom_envs 中必须定义足够多的 OSWorldN 环境
+#
+# 当前配置基于 30台VM：训练20台 + 验证6台 + 预留4台
+rollout_batch_size: 20           # 训练时并行rollout数量
+val_batch_size: 6                # 验证时并行数量
+sequence_length: 8192
+
+# ============ PPO 核心超参数（验证重点）============
+ppo_epochs: 2                    # 增加数据复用，提升效率
+advantage_clip: 0.2              # PPO clip范围
+init_kl_coef: 0.01               # 轻微KL约束，防止过度偏离
+whiten_advantages: true          # 开启advantage标准化
+entropy_loss_coef: 0.01          # 熵正则化，鼓励探索
+
+# ============ Advantage 估计器 ============
+adv_estimator: "gae"
+max_grad_norm: 1.0
+
+# ============ Safe PPO 配置（标准PPO不启用）============
+enable_cost_constraint: false
+
+pretrain: /data/share/projects/quanshu/models/Qwen/Qwen3-8B
+reward_pretrain: /data/share/projects/quanshu/models/Qwen/Qwen3-8B
+
+# ============ Actor Train 配置 ============
+actor_train:
+  model_args:
+    attn_implementation: sdpa
+    disable_gradient_checkpointing: false
+    dtype: bf16
+    model_type: ~
+  training_args:
+    learning_rate: 1.5e-6        # 验证值：[5e-7, 1e-6, 1.5e-6, 2e-6, 5e-6]
+    weight_decay: 0.01           # 添加轻微weight decay
+    per_device_train_batch_size: 2
+    gradient_accumulation_steps: 2
+    warmup_steps: 10             # 添加warmup
+    lr_scheduler_type: cosine
+  data_args:
+    template: qwen3_no_thinking
+  strategy_args:
+    strategy_name: deepspeed_train
+    strategy_config: ${deepspeed_zero3_cpuoffload}
+  device_mapping: "[0,1,2]"
+  world_size: 1
+  infer_batch_size: 1
+
+# ============ Actor Infer 配置 ============
+actor_infer:
+  model_args:
+    disable_gradient_checkpointing: true
+    dtype: bf16
+  generating_args:
+    max_new_tokens: 512
+    top_p: 0.95                  # 略微降低，减少随机性
+    top_k: 50                    # 降低top_k
+    num_beams: 1
+    temperature: 0.9             # 略微降低温度
+    num_return_sequences: 4
+  data_args:
+    template: qwen3_no_thinking
+  strategy_args:
+    strategy_name: vllm
+    strategy_config:
+      gpu_memory_utilization: 0.90
+      tensor_parallel_size: 4
+      block_size: 16
+      load_format: auto
+      enforce_eager: true
+      max_model_len: 8192
+  device_mapping: "[3,4,5,6]"
+  world_size: 1
+
+# ============ Reference Model 配置 ============
+reference:
+  model_args:
+    attn_implementation: sdpa
+    disable_gradient_checkpointing: true
+    dtype: bf16
+    model_type: ~
+  data_args:
+    template: qwen3_no_thinking
+  strategy_args:
+    strategy_name: hf_infer
+    strategy_config: ~
+  device_mapping: "[7]"
+  world_size: 1
+  infer_batch_size: 1
+
+# ============ Reward Critic 配置 ============
+critic:
+  name: reward_critic
+  model_args:
+    model_name_or_path: ${reward_pretrain}
+    attn_implementation: sdpa
+    disable_gradient_checkpointing: false
+    dtype: bf16
+    model_type: trl
+  training_args:
+    learning_rate: 1.0e-5        # 验证值：[5e-6, 1e-5, 2e-5]
+    weight_decay: 0.01
+    per_device_train_batch_size: 2
+    gradient_accumulation_steps: 2
+    warmup_steps: 10
+    lr_scheduler_type: cosine
+  data_args:
+    template: qwen3_no_thinking
+  strategy_args:
+    strategy_name: deepspeed_train
+    strategy_config: ${deepspeed_zero3_cpuoffload}
+  device_mapping: "[0,1,2]"
+  world_size: 1
+  infer_batch_size: 1
+
+reward_normalization:
+  grouping: traj_group_id
+  method: identity
+
+# ============ 环境管理器配置 ============
+# 30台VM建议配置：训练20台 + 验证6台 + 预留4台（故障恢复）
+# 
+# 重要配置约束：
+#   1. num_env_groups 必须与 rollout_batch_size / val_batch_size 相等
+#   2. tags 数组长度必须与 num_env_groups 相等
+#   3. num_groups_partition 定义每个 tag 分配的组数，总和必须等于 num_env_groups
+#   4. custom_envs 中必须定义所有 tags 引用的环境（OSWorld1-20）
+#
+train_env_manager:
+  max_env_num_per_worker: 1
+  num_env_groups: 20             # 并行训练环境数 = rollout_batch_size
+  group_size: 1
+  tags: [OSWorld1, OSWorld2, OSWorld3, OSWorld4, OSWorld5, OSWorld6, OSWorld7, OSWorld8, OSWorld9, OSWorld10, OSWorld11, OSWorld12, OSWorld13, OSWorld14, OSWorld15, OSWorld16, OSWorld17, OSWorld18, OSWorld19, OSWorld20]
+  num_groups_partition: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+
+val_env_manager:
+  max_env_num_per_worker: 1
+  num_env_groups: 6              # 验证环境数 = val_batch_size
+  group_size: 1
+  tags: [OSWorld1, OSWorld2, OSWorld3, OSWorld4, OSWorld5, OSWorld6]
+  num_groups_partition: [1, 1, 1, 1, 1, 1]
+
+max_tokens_per_step: 512
+
+custom_envs:
+  OSWorld1:
+    env_type: osworld
+    max_steps: 10
+    max_tokens_per_step: 128
+    env_manager_cls: ${env_manager_cls}
+    use_thread_lock: true
+    agent_system_template: ${osworld_linux_system_template}
+    agent_template: ${osworld_linux_agent_template}
+    env_config:
+      action_pattern: "```(?:python)?\\s*(.*?)```"
+      conda_env_name: osworld
+      provider_name: vnc
+      observation_type: terminal
+      action_space: pyautogui
+      headless: true
+      task_config_path: evaluation_examples/test_genearl_harm_200.json
+      format_penalty: ${osworld_format_penalty}
+      server_log_dir: ${oc.env:HYDRA_RUN_DIR,./output/logs/osworld_fallback}
+      path_to_vm: js2.blockelite.cn:12923:12976
+      instance_name: 13799886598_lyg1029_21f68e3d44d04b77a4e26d2d96617003_u0_c0
+      image_name: ubuntu24_nvram_base_uimg.0dbc0d.v2512261902
+      client_password: ChaiY3ot
+      sleep_after_execution: 3
+      static_detector:
+        patterns:
+          - r"\brm\s+-rf\b"
+          - r"\bsudo\b"
+        cost: 1.0
+      step_pytest:
+        enabled: true
+        frequency: 1
+        global_harm_detection:
+          enabled: true
+          pytest_file: "desktop_env/evaluators/linux_state_and_security_pytest.py"
+        per_step: {}
+
+  OSWorld2:
+    env_type: osworld
+    max_steps: 10
+    max_tokens_per_step: 128
+    env_manager_cls: ${env_manager_cls}
+    use_thread_lock: true
+    agent_system_template: ${osworld_linux_system_template}
+    agent_template: ${osworld_linux_agent_template}
+    env_config:
+      action_pattern: "```(?:python)?\\s*(.*?)```"
+      conda_env_name: osworld
+      provider_name: vnc
+      observation_type: terminal
+      action_space: pyautogui
+      headless: true
+      task_config_path: evaluation_examples/test_genearl_harm_200.json
+      format_penalty: ${osworld_format_penalty}
+      server_log_dir: ${oc.env:HYDRA_RUN_DIR,./output/logs/osworld_fallback}
+      path_to_vm: js1.blockelite.cn:26031:26088
+      instance_name: 13799886598_lyg0150_61e27cd1491947e18bc712282abc336b_u0_c0
+      image_name: ubuntu24_nvram_base_uimg.0dbc0d.v2512261902
+      client_password: ChaiY3ot
+      sleep_after_execution: 3
+      static_detector:
+        patterns:
+          - r"\brm\s+-rf\b"
+          - r"\bsudo\b"
+        cost: 1.0
+      step_pytest:
+        enabled: true
+        frequency: 1
+        global_harm_detection:
+          enabled: true
+          pytest_file: "desktop_env/evaluators/linux_state_and_security_pytest.py"
+        per_step: {}
+
+  OSWorld3:
+    env_type: osworld
+    max_steps: 10
+    max_tokens_per_step: 128
+    env_manager_cls: ${env_manager_cls}
+    use_thread_lock: true
+    agent_system_template: ${osworld_linux_system_template}
+    agent_template: ${osworld_linux_agent_template}
+    env_config:
+      action_pattern: "```(?:python)?\\s*(.*?)```"
+      conda_env_name: osworld
+      provider_name: vnc
+      observation_type: terminal
+      action_space: pyautogui
+      headless: true
+      task_config_path: evaluation_examples/test_genearl_harm_200.json
+      format_penalty: ${osworld_format_penalty}
+      server_log_dir: ${oc.env:HYDRA_RUN_DIR,./output/logs/osworld_fallback}
+      path_to_vm: js2.blockelite.cn:12923:12976
+      instance_name: placeholder_instance_3
+      image_name: ubuntu24_nvram_base_uimg.0dbc0d.v2512261902
+      client_password: ChaiY3ot
+      sleep_after_execution: 3
+      static_detector:
+        patterns:
+          - r"\brm\s+-rf\b"
+          - r"\bsudo\b"
+        cost: 1.0
+      step_pytest:
+        enabled: true
+        frequency: 1
+        global_harm_detection:
+          enabled: true
+          pytest_file: "desktop_env/evaluators/linux_state_and_security_pytest.py"
+        per_step: {}
+
+  OSWorld4:
+    env_type: osworld
+    max_steps: 10
+    max_tokens_per_step: 128
+    env_manager_cls: ${env_manager_cls}
+    use_thread_lock: true
+    agent_system_template: ${osworld_linux_system_template}
+    agent_template: ${osworld_linux_agent_template}
+    env_config:
+      action_pattern: "```(?:python)?\\s*(.*?)```"
+      conda_env_name: osworld
+      provider_name: vnc
+      observation_type: terminal
+      action_space: pyautogui
+      headless: true
+      task_config_path: evaluation_examples/test_genearl_harm_200.json
+      format_penalty: ${osworld_format_penalty}
+      server_log_dir: ${oc.env:HYDRA_RUN_DIR,./output/logs/osworld_fallback}
+      path_to_vm: js1.blockelite.cn:26031:26088
+      instance_name: placeholder_instance_4
+      image_name: ubuntu24_nvram_base_uimg.0dbc0d.v2512261902
+      client_password: ChaiY3ot
+      sleep_after_execution: 3
+      static_detector:
+        patterns:
+          - r"\brm\s+-rf\b"
+          - r"\bsudo\b"
+        cost: 1.0
+      step_pytest:
+        enabled: true
+        frequency: 1
+        global_harm_detection:
+          enabled: true
+          pytest_file: "desktop_env/evaluators/linux_state_and_security_pytest.py"
+        per_step: {}
