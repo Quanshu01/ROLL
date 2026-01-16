@@ -4,7 +4,7 @@ import socket
 import time
 from concurrent import futures
 from dataclasses import dataclass
-from typing import Dict
+from typing import Dict, Optional, List
 
 import ray
 
@@ -18,6 +18,7 @@ from roll.utils.context_managers import state_offload_manger
 from roll.utils.logging import get_logger
 from roll.utils.network_utils import collect_free_port, get_node_ip
 from roll.utils.offload_states import OffloadStateType
+from roll.utils.offload_nccl import monkey_patch_torch_dist
 from roll.platforms import current_platform
 
 
@@ -43,6 +44,8 @@ class RankInfo:
 class Worker:
 
     def __init__(self, worker_config: WorkerConfig):
+        if worker_config.offload_nccl:
+            monkey_patch_torch_dist()
         self.worker_config = worker_config
         self.pipeline_config = None
         self.worker_name = os.environ.get("WORKER_NAME", None)
@@ -345,3 +348,20 @@ class Worker:
     def download_models(self, model_name_or_paths: set[str]):
         futures.wait([self.thread_executor.submit(download_model, model_name_or_path)
                       for model_name_or_path in model_name_or_paths])
+
+    @register(dispatch_mode=Dispatch.DP_MP_COMPUTE)
+    def get_metrics(self, metric_names: Optional[List[str]] = None) -> DataProto:
+        """
+        Get performance metrics from the strategy layer.
+
+        Args:
+            metric_names: Optional list of specific metric names to filter
+
+        Returns:
+            Dictionary of metric names to aggregated values
+        """
+        if getattr(self, "strategy", None) is not None:
+            metrics = self.strategy.get_metrics(metric_names=metric_names)
+        else:
+            metrics = {}
+        return DataProto(meta_info={"metrics": metrics})

@@ -18,7 +18,7 @@ from roll.distributed.scheduler.protocol import DataProto
 from roll.models.model_providers import default_tokenizer_provider
 from roll.pipeline.agentic.agentic_config import AgenticConfig, EnvManagerConfig
 from roll.pipeline.agentic.utils import (dump_rollout_render, compute_discounted_returns,
-                                         compute_response_level_rewards, dump_rollout_trajectories)
+                                         compute_response_level_rewards, dump_rollout_trajectories, get_agentic_response_level_mask)
 from roll.pipeline.base_pipeline import BasePipeline
 from roll.utils.constants import RAY_NAMESPACE
 from roll.utils.functionals import (
@@ -29,6 +29,7 @@ from roll.utils.functionals import (
     RunningMoments,
     compute_clip_fraction,
     agg_loss,
+    compute_token_reward,
 )
 from roll.utils.kl_controller import get_kl_controller
 from roll.utils.logging import get_logger
@@ -61,14 +62,17 @@ class AgenticPipeline(BasePipeline):
             resource_manager=self.resource_manager,
             worker_config=self.pipeline_config.actor_infer,
         )
-        self.reference: Any = Cluster(
-            name=self.pipeline_config.reference.name,
-            worker_cls=self.pipeline_config.reference.worker_cls,
-            resource_manager=self.resource_manager,
-            worker_config=self.pipeline_config.reference,
-        )
+        download_clusters = [self.actor_train, self.actor_infer]
 
-        download_clusters = [self.actor_train, self.actor_infer, self.reference]
+        if self.pipeline_config.enable_reference:
+            self.reference: Any = Cluster(
+                name=self.pipeline_config.reference.name,
+                worker_cls=self.pipeline_config.reference.worker_cls,
+                resource_manager=self.resource_manager,
+                worker_config=self.pipeline_config.reference,
+            )
+            download_clusters.append(self.reference)
+
         if self.pipeline_config.adv_estimator == "gae":
             self.critic: Any = Cluster(
                 name=self.pipeline_config.critic.name,
@@ -133,7 +137,8 @@ class AgenticPipeline(BasePipeline):
 
         self.actor_infer.initialize(pipeline_config=self.pipeline_config, blocking=True)
 
-        refs.extend(self.reference.initialize(pipeline_config=self.pipeline_config, blocking=True))
+        if self.pipeline_config.enable_reference:
+            refs.extend(self.reference.initialize(pipeline_config=self.pipeline_config, blocking=True))
         self.set_model_update_pair(
             src_cluster=self.actor_train,
             tgt_cluster=self.actor_infer,
@@ -223,7 +228,11 @@ class AgenticPipeline(BasePipeline):
                 ray.get(self.train_rollout_scheduler.suspend.remote())
                 if self.pipeline_config.async_generation_ratio > 0:
                     self.actor_infer.stop_server()
-                model_update_metrics: Dict = self.model_update(global_step)
+
+                with Timer(name="model_update", logger=None) as model_update_timer:
+                    model_update_metrics: Dict = self.model_update(global_step)
+                metrics["time/step_model_update"] =model_update_timer.last
+
                 metrics.update(model_update_metrics)
                 if self.pipeline_config.async_generation_ratio > 0:
                     self.actor_infer.start_server(data=DataProto(meta_info={"global_step": global_step, "is_offload_states": False}))
@@ -233,8 +242,10 @@ class AgenticPipeline(BasePipeline):
                 batch: DataProto = DataProto()
                 batch.meta_info = {"global_step": global_step}
 
-                if global_step % self.pipeline_config.eval_steps == 0:
-                    metrics.update(self.val(global_step=global_step))
+                if self.pipeline_config.eval_steps > 0 and global_step % self.pipeline_config.eval_steps == 0:
+                    with Timer(name="val", logger=None) as val_timer:
+                        metrics.update(self.val(global_step=global_step))
+                    metrics["time/step_val"] = val_timer.last
 
                 with Timer(name="rollout", logger=None) as rollout_timer:
                     logger.info(f"[DEBUG] [Step {global_step}] 开始rollout阶段...")
@@ -244,30 +255,31 @@ class AgenticPipeline(BasePipeline):
                     logger.info(f"[DEBUG] [Step {global_step}] rollout完成，batch形状: {batch.batch.batch_size if hasattr(batch.batch, 'batch_size') else 'N/A'}")
                     dump_rollout_trajectories(self.pipeline_config.rollout_dump_dir, global_step, batch)
 
-                metrics["time/rollout"] = rollout_timer.last
-                metrics.update(reduce_metrics(batch.meta_info.pop("metrics", {})))
-                batch.meta_info["global_step"] = global_step
-                if not (self.pipeline_config.async_generation_ratio > 0):
-                    self.actor_infer.stop_server()
+                    metrics["time/step_rollout"] = rollout_timer.last
+                    metrics.update(reduce_metrics(batch.meta_info.pop("metrics", {})))
+                    batch.meta_info["global_step"] = global_step
+                    if not (self.pipeline_config.async_generation_ratio > 0):
+                        self.actor_infer.stop_server()
 
-                batch = compute_discounted_returns(batch, self.pipeline_config.adv_estimator, self.pipeline_config.step_reward_gamma)
+                    batch = compute_discounted_returns(batch, self.pipeline_config.adv_estimator, self.pipeline_config.step_reward_gamma)
 
-                batch = self.adjust_batch(batch, mode=self.pipeline_config.batch_adjust_mode)
-                metrics.update(reduce_metrics(batch.meta_info.pop("metrics", {})))
+                    batch = self.adjust_batch(batch, mode=self.pipeline_config.batch_adjust_mode)
+                    metrics.update(reduce_metrics(batch.meta_info.pop("metrics", {})))
 
-                with Timer(name="cal_ref_log_probs", logger=None) as cal_timer:
-                    ref_log_probs_refs: List[ray.ObjectRef] = self.reference.compute_log_probs(batch, blocking=False)
-                    ref_log_probs = DataProto.materialize_concat(data_refs=ref_log_probs_refs)
-                    ref_log_probs.rename(old_keys="log_probs", new_keys="ref_log_probs")
-                    # 先处理metrics，避免union时冲突
-                    ref_log_probs_metrics = ref_log_probs.meta_info.pop("metrics", {})
-                    batch_metrics = batch.meta_info.pop("metrics", {})
-                    batch = batch.union(ref_log_probs)
-                    avg_ref_log_prob = masked_mean(batch.batch["ref_log_probs"], batch.batch["response_mask"][:, 1:])
-                    metrics.update(reduce_metrics(batch_metrics))
-                    metrics.update(reduce_metrics(ref_log_probs_metrics))
-                    metrics.update({"critic/ref_log_prob/mean": avg_ref_log_prob.item()})
-                metrics["time/ref_log_probs_values_reward"] = cal_timer.last
+                if self.pipeline_config.enable_reference:
+                    with Timer(name="cal_ref_log_probs", logger=None) as cal_timer:
+                        ref_log_probs_refs: List[ray.ObjectRef] = self.reference.compute_log_probs(batch, blocking=False)
+                        ref_log_probs = DataProto.materialize_concat(data_refs=ref_log_probs_refs)
+                        ref_log_probs.rename(old_keys="log_probs", new_keys="ref_log_probs")
+                        # 先处理metrics，避免union时冲突
+                        ref_log_probs_metrics = ref_log_probs.meta_info.pop("metrics", {})
+                        batch_metrics = batch.meta_info.pop("metrics", {})
+                        batch = batch.union(ref_log_probs)
+                        avg_ref_log_prob = masked_mean(batch.batch["ref_log_probs"], batch.batch["response_mask"][:, 1:])
+                        metrics.update(reduce_metrics(batch_metrics))
+                        metrics.update(reduce_metrics(ref_log_probs_metrics))
+                        metrics.update({"critic/ref_log_prob/mean": avg_ref_log_prob.item()})
+                    metrics["time/ref_log_probs_values_reward"] = cal_timer.last
 
                 with Timer(name="cal_old_log_probs_values", logger=None) as cal_old_logpb_timer:
                     # TODO: use engine log_probs as old_log_probs
@@ -318,7 +330,8 @@ class AgenticPipeline(BasePipeline):
                     # Rewards need to be processed after grouping
                     # We can group by tag(env_type)/traj_group_id(group)/batch(rollout_batch)... to compute rewards / advantages
                     # The compute_response_level_rewards function injects a response_level_rewards key into batch.batch.
-                    batch = compute_response_level_rewards(batch=batch, pipeline_config=self.pipeline_config)
+                    batch, reward_metrics = compute_response_level_rewards(batch=batch, pipeline_config=self.pipeline_config)
+                    metrics.update(reduce_metrics(reward_metrics))
                     
                     # 记录 response_level_rewards 的统计信息（用于监控训练）
                     if "response_level_rewards" in batch.batch:
@@ -563,16 +576,19 @@ class AgenticPipeline(BasePipeline):
                         metrics.update(reduce_metrics(cost_metrics_renamed))
                 tps_timer.push_units_processed(n=torch.sum(batch.batch["attention_mask"]).detach().item())
 
-            data_metrics = compute_data_metrics(batch=batch)
-            metrics.update(data_metrics)
-            metrics["system/tps"] = tps_timer.mean_throughput
-            metrics["system/samples"] = (global_step + 1) * self.pipeline_config.rollout_batch_size
+                with Timer(name="compute_data_metrics", logger=None) as data_metrics_timer:
+                    data_metrics = compute_data_metrics(batch=batch)
 
-            # do ckpt
-            self.state.step = global_step
-            self.state.log_history.append(metrics)
+                metrics["time/step_compute_data_metrics"] = data_metrics_timer.last
+                metrics.update(data_metrics)
+                metrics["system/tps"] = tps_timer.mean_throughput
+                metrics["system/samples"] = (global_step + 1) * self.pipeline_config.rollout_batch_size
 
-            self.do_checkpoint(global_step=global_step)
+                # do ckpt
+                self.state.step = global_step
+                self.state.log_history.append(metrics)
+
+                self.do_checkpoint(global_step=global_step)
 
             self.tracker.log(values=metrics, step=global_step)
 
@@ -590,46 +606,52 @@ class AgenticPipeline(BasePipeline):
             logger.info(f"{'='*80}\n")
 
             if global_step % self.pipeline_config.logging_steps == 0:
-                if int(os.environ.get("RAY_PROFILING", "0")):
-                    timeline_dir = os.path.join(self.pipeline_config.profiler_output_dir, "timeline")
-                    os.makedirs(timeline_dir, exist_ok=True)
-                    ray.timeline(
-                        filename=os.path.join(timeline_dir, f"timeline-step-{global_step}.json"),
-                    )
-
-                log_res = []
-                batch_grouped = batch.group_by(keys="traj_id")
-                for group_name, group_batch in batch_grouped.items():
-                    prompt_mask = group_batch.batch["prompt_mask"]
-                    non_prompt_mask = torch.logical_not(group_batch.batch["prompt_mask"]) * group_batch.batch["attention_mask"]
-                    input_ids = group_batch.batch["input_ids"]
-                    prompt_ids_list = [input_ids[i][mask.bool()] for i, mask in enumerate(prompt_mask)]
-                    response_ids_list = [input_ids[i][mask.bool()] for i, mask in enumerate(non_prompt_mask)]
-                    # Avoid logging tokenizer special tokens (e.g. <|im_start|>)
-                    prompts = self.tokenizer.batch_decode(prompt_ids_list, skip_special_tokens=True)
-                    responses = self.tokenizer.batch_decode(response_ids_list, skip_special_tokens=True)
-                    episode_scores = group_batch.non_tensor_batch["episode_scores"].tolist()
-                    step_scores = group_batch.non_tensor_batch["step_scores"].tolist()
-                    if not isinstance(step_scores[0], float):
-                        step_scores = [t.tolist() for t in step_scores]
-
-                    log_item = []
-                    for prompt, response, episode_score, step_score in zip(
-                            prompts, responses, episode_scores, step_scores
-                    ):
-                        log_item.append(
-                            {
-                                "prompt": prompt,
-                                "response": response,
-                                "episode_score": episode_score,
-                                "step_score": step_score,
-                            }
+                with Timer(name="step_log", logger=None) as log_timer:
+                    if int(os.environ.get("RAY_PROFILING", "0")):
+                        timeline_dir = os.path.join(self.pipeline_config.profiler_output_dir, "timeline")
+                        os.makedirs(timeline_dir, exist_ok=True)
+                        ray.timeline(
+                            filename=os.path.join(timeline_dir, f"timeline-step-{global_step}.json"),
                         )
-                    log_res.append(log_item)
-                    if len(log_res) >= 10:
-                        break
-                logger.info(json.dumps(log_res, ensure_ascii=False))
-                logger.info(json.dumps(metrics, ensure_ascii=False))
+
+                    log_res = []
+                    batch_grouped = batch.group_by(keys="traj_id")
+                    for group_name, group_batch in batch_grouped.items():
+                        prompt_mask = group_batch.batch["prompt_mask"]
+                        non_prompt_mask = torch.logical_not(group_batch.batch["prompt_mask"]) * group_batch.batch["attention_mask"]
+                        input_ids = group_batch.batch["input_ids"]
+                        prompt_ids_list = [input_ids[i][mask.bool()] for i, mask in enumerate(prompt_mask)]
+                        response_ids_list = [input_ids[i][mask.bool()] for i, mask in enumerate(non_prompt_mask)]
+                        # Avoid logging tokenizer special tokens (e.g. <|im_start|>)
+                        prompts = self.tokenizer.batch_decode(prompt_ids_list, skip_special_tokens=True)
+                        responses = self.tokenizer.batch_decode(response_ids_list, skip_special_tokens=True)
+                        episode_scores = group_batch.non_tensor_batch["episode_scores"].tolist()
+                        step_scores = group_batch.non_tensor_batch["step_scores"].tolist()
+                        if not isinstance(step_scores[0], float):
+                            step_scores = [t.tolist() for t in step_scores]
+
+                        log_item = []
+                        for prompt, response, episode_score, step_score in zip(
+                                prompts, responses, episode_scores, step_scores
+                        ):
+                            log_item.append(
+                                {
+                                    "prompt": prompt,
+                                    "response": response,
+                                    "episode_score": episode_score,
+                                    "step_score": step_score,
+                                }
+                            )
+                        log_res.append(log_item)
+                        if len(log_res) >= 10:
+                            break
+                    logger.info(json.dumps(log_res, ensure_ascii=False))
+                    logger.info(json.dumps(metrics, ensure_ascii=False))
+
+                metrics["time/step_log"] = log_timer.last
+
+            metrics["time/step_total"] = step_time
+            self.tracker.log(values=metrics, step=global_step)
 
             logger.info(f"pipeline step {global_step} finished")
             global_step += 1
@@ -648,6 +670,9 @@ class AgenticPipeline(BasePipeline):
         batch.meta_info["global_step"] = global_step
         ray.get(self.val_dataset_manager.reset.remote())
         eval_batch = ray.get(self.val_rollout_scheduler.get_batch.remote(batch, self.pipeline_config.val_batch_size))
+
+        if "get_batch_return_start_time" in eval_batch.meta_info:
+            metrics["time/get_batch_cost_val"] = time.time() - eval_batch.meta_info.pop("get_batch_return_start_time")
 
         dump_rollout_trajectories(self.pipeline_config.rollout_dump_dir, global_step, eval_batch)
         eval_metrics = reduce_metrics(eval_batch.meta_info.get("metrics", {}))
@@ -680,7 +705,10 @@ class AgenticPipeline(BasePipeline):
         """
         actor_train_train_bsz = self.pipeline_config.actor_train.training_args.per_device_train_batch_size * self.pipeline_config.actor_train.training_args.gradient_accumulation_steps * self.actor_train.dp_size
         actor_train_infer_bsz = self.pipeline_config.actor_train.infer_batch_size * self.actor_train.dp_size
-        ref_infer_bsz = self.pipeline_config.reference.infer_batch_size * self.reference.dp_size
+
+        ref_infer_bsz = 1
+        if hasattr(self, "reference"):
+            ref_infer_bsz = self.pipeline_config.reference.infer_batch_size * self.reference.dp_size
         critic_train_bsz = 1
         critic_infer_bsz = 1
         if self.pipeline_config.adv_estimator == "gae":

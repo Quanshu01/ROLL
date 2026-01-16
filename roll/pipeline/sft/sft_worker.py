@@ -31,7 +31,13 @@ class SFTWorker(Worker):
     def train_step(self, data: DataProto):
         data = data.to(current_platform.device_type)
         data = self.strategy.get_data_input(data)
-        metrics = self.strategy.train_step(batch=data, loss_func=self.loss_func)
+
+        loss_func = self.loss_func
+        if self.worker_config.use_sequence_packing:
+            from roll.utils.sequence_packing import SequencePackingSFTLossWrapper
+            loss_func = SequencePackingSFTLossWrapper(self.strategy, loss_func)
+
+        metrics = self.strategy.train_step(batch=data, loss_func=loss_func)
         output = DataProto(meta_info={"metrics": metrics}).to("cpu")
         return output
 
@@ -62,4 +68,6 @@ class SFTWorker(Worker):
 
     def loss_func(self, data: DataProto, output_tensor: torch.Tensor):
         labels = data.batch["labels"]
-        return self.strategy.op_compute_language_loss(output_tensor, labels)
+        loss = self.strategy.op_compute_language_loss(output_tensor, labels)
+        metrics = {f"{self.worker_config.name}/loss": loss.detach().float().unsqueeze(0)}
+        return loss, metrics

@@ -16,6 +16,7 @@ checkpoint_config:
 save_steps: 100
 logging_steps: 1
 resume_from_checkpoint: false
+eval_steps: 50
 
 student_pretrain: Qwen/Qwen2.5-7B-Instruct
 teacher_pretrain: Qwen/Qwen2.5-14B-Instruct
@@ -28,11 +29,17 @@ distill_on_prompt: False
 
 logits_transfer_backend: "nccl-only" # support "ipc+nccl", "nccl_only" and "ray"
 
-sequence_length: 1024
+sequence_length: 2048
 max_grad_norm: 1.0
 
 question_key: question_zh
 answer_key: answer_zh
+
+validation:
+  data_args:
+    file_name: 
+      - data/GSM8K_zh.json
+    template: qwen2_5
 
 student:
   model_args:
@@ -43,8 +50,8 @@ student:
   training_args:
     learning_rate: 2.0e-5
     lr_scheduler_type: constant
-    per_device_train_batch_size: 2
-    gradient_accumulation_steps: 1
+    per_device_train_batch_size: 8
+    gradient_accumulation_steps: 4
     warmup_steps: 0
     num_train_epochs: 1
 
@@ -57,11 +64,14 @@ student:
     strategy_name: megatron_train
     strategy_config:
       tensor_model_parallel_size: 2
+      sequence_parallel: True
       pipeline_model_parallel_size: 2
       context_parallel_size: 2
       use_distributed_optimizer: true
       recompute_granularity: full
+  use_sequence_packing: True
   device_mapping: list(range(0,8))
+  infer_batch_size: 2
 
 teacher:
   model_args:
@@ -72,14 +82,16 @@ teacher:
     template: qwen2_5
   training_args:
     # teacher forward micro_batch_size
-    per_device_train_batch_size: 1
+    per_device_train_batch_size: 8
   strategy_args:
     strategy_name: megatron_infer
     strategy_config:
       tensor_model_parallel_size: 2
+      sequence_parallel: True
       pipeline_model_parallel_size: 2
       context_parallel_size: 2
       bf16: true
+  use_sequence_packing: True
   device_mapping: list(range(0,8))
 
 system_envs:

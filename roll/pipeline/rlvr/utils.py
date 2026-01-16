@@ -14,7 +14,7 @@ from roll.utils.logging import get_logger
 
 logger = get_logger()
 
-COLUMMNS_CONFIG = [
+COLUMNS_CONFIG = [
         ['global_step','bigint'],
         ['id','string'],
         ['source','string'],

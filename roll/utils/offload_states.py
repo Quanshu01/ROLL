@@ -4,7 +4,6 @@ from typing import List, Tuple, Union
 import torch
 from torch import Tensor
 from transformers import PreTrainedModel
-from trl import AutoModelForCausalLMWithValueHead
 from roll.platforms import current_platform
 
 
@@ -29,9 +28,25 @@ def offload_hf_model(model: PreTrainedModel):
         return
     device_map = getattr(model, "hf_device_map", None)
     if device_map is None:
+        # 检查模型是否在 meta device 上，如果是则跳过 offload
+        if hasattr(model, 'parameters') and len(list(model.parameters())) > 0:
+            first_param = next(model.parameters())
+            if first_param.device.type == "meta":
+                return
         model.to("cpu")
     else:
-        [model.get_submodule(layer_name).to("cpu") for layer_name, device_id in device_map.items()]
+        # 检查每个子模块是否在 meta device 上
+        for layer_name, device_id in device_map.items():
+            try:
+                submodule = model.get_submodule(layer_name)
+                if hasattr(submodule, 'parameters') and len(list(submodule.parameters())) > 0:
+                    first_param = next(submodule.parameters())
+                    if first_param.device.type == "meta":
+                        continue
+                submodule.to("cpu")
+            except Exception as e:
+                # 如果获取子模块失败，跳过
+                continue
 
 
 def load_hf_model(model: PreTrainedModel):
@@ -47,12 +62,23 @@ def load_hf_model(model: PreTrainedModel):
     if device_map is None:
         model.to(current_platform.device_type)
     else:
-        [
-            model.get_submodule(layer_name).to(
-                device_id if isinstance(device_id, torch.device) else f"{current_platform.device_type}:{device_id}"
-            )
-            for layer_name, device_id in device_map.items()
-        ]
+        for layer_name, device_id in device_map.items():
+            try:
+                submodule = model.get_submodule(layer_name)
+                # 处理设备字符串：如果是 "cpu" 或 "meta"，直接使用；如果是数字，添加设备前缀
+                if isinstance(device_id, torch.device):
+                    target_device = device_id
+                elif isinstance(device_id, str) and device_id in ["cpu", "meta"]:
+                    target_device = device_id
+                elif isinstance(device_id, (int, str)) and str(device_id).isdigit():
+                    target_device = f"{current_platform.device_type}:{device_id}"
+                else:
+                    # 如果已经是完整的设备字符串（如 "cuda:0"），直接使用
+                    target_device = device_id
+                submodule.to(target_device)
+            except Exception as e:
+                # 如果获取子模块失败，跳过
+                continue
 
 
 def get_mapping_to_flat_buffer(tensors: List[torch.Tensor]) -> List[Tuple[torch.Tensor, int, int]]:

@@ -149,6 +149,23 @@ class RLVRConfig(PPOConfig):
     importance_sampling: Literal["token", "seq"] = (
         field(default="token", metadata={"help": "policy importance sampling"})
     )
+    use_rollout_importance_sampling_ratio: bool = field(default=False, metadata={"help": "apply train/infer ratio as token-level loss weight"})
+    rollout_importance_sampling_ratio_upper_bound: float = field(default=1.2)
+
+    train_infer_ratio_mask: bool = field(default=False, metadata={"help": "apply train/infer ratio as token-level response mask"})
+    train_infer_ratio_threshold_low: float = field(default=0.8)
+    train_infer_ratio_threshold_high: float = field(default=1.2)
+    train_infer_diff_mask: bool = field(default=False, metadata={"help": "apply train-infer diff as token-level response mask"})
+    train_infer_diff_threshold_low: float = field(default=-0.2)
+    train_infer_diff_threshold_high: float = field(default=0.2)
+
+    train_infer_ratio_seq_mask: bool = field(default=False, metadata={"help": "apply train/infer ratio as sequence-level response mask"})
+    train_infer_ratio_seq_threshold_low: float = field(default=0.8)
+    train_infer_ratio_seq_threshold_high: float = field(default=1.2)
+    train_infer_diff_seq_mask: bool = field(default=False, metadata={"help": "apply train-infer diff as sequence-level response mask"})
+    train_infer_diff_seq_threshold_low: float = field(default=-0.2)
+    train_infer_diff_seq_threshold_high: float = field(default=0.2)
+
     val_greedy: bool = field(default=False, metadata={"help": "Use greedy for validation"})
     val_n_sample: int = field(default=1, metadata={"help": "Number of samples for validation"})
     max_len_mask: bool = field(default=False)
@@ -162,6 +179,7 @@ class RLVRConfig(PPOConfig):
     error_max_len_threshold: int = field(default=9999999999)
 
     def __post_init__(self):
+        self.actor_infer.generating_args.num_return_sequences = self.num_return_sequences_in_group
         super().__post_init__()
 
         # default worker_cls
@@ -175,8 +193,6 @@ class RLVRConfig(PPOConfig):
             self.critic.worker_cls = "roll.pipeline.base_worker.CriticWorker"
 
         logger.info(f"actor_train.worker_cls: {self.actor_train.worker_cls}")
-
-        self.actor_infer.generating_args.num_return_sequences = self.num_return_sequences_in_group
 
         self.domain_2_tag = None
         self.tag_2_domain = None
@@ -235,6 +251,8 @@ class RLVRConfig(PPOConfig):
                 self.num_nodes = 1
             else:
                 self.num_nodes = (max_gpu_num + self.num_gpus_per_node - 1) // self.num_gpus_per_node
+
+        self.validate_worker_config()
 
     def to_dict(self):
         return dataclasses.asdict(self)

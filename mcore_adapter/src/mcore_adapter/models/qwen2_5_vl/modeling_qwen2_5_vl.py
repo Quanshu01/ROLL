@@ -23,7 +23,7 @@ class Qwen2_5_VLModel(McaGPTModel, ModuleUtilsMixin):
         if self.pre_process:
             self.vision_model = Qwen2_5_VisionTransformerPretrainedModel._from_config(
                 Qwen2_5_VLVisionConfig(**config.vision_config),
-                attn_implementation="flash_attention_2",
+                attn_implementation="sdpa",
                 torch_dtype=self.config.params_dtype,
             ).to(current_platform.current_device())
             for param in self.vision_model.parameters():
@@ -324,7 +324,19 @@ class Qwen2_5_VLModel(McaGPTModel, ModuleUtilsMixin):
         **kwargs,
     ) -> "torch.Tensor":
         force_vit_image = kwargs.pop("force_vit_image", False)
-        force_vit_video = kwargs.pop("force_vit_video", False)
+        force_vit_video = kwargs.pop("force_vit_video", False)       
+        
+        if position_ids is not None:
+            expected_shape = (3, input_ids.shape[0], input_ids.shape[1])  # (3, batch, seq_len)
+            if position_ids.shape != expected_shape:
+                if position_ids.shape == (input_ids.shape[0], input_ids.shape[1]):
+                    position_ids, _ = self.get_rope_index(
+                        input_ids, image_grid_thw, video_grid_thw, second_per_grid_ts, attention_mask
+                    )
+                else:
+                    raise ValueError(f"Unexpected position_ids shape: {position_ids.shape}, "
+                                     f"expected: {expected_shape} or {(input_ids.shape[0], input_ids.shape[1])}")
+
         if position_ids is None and input_ids is not None:
             position_ids, _ = self.get_rope_index(
                 input_ids, image_grid_thw, video_grid_thw, second_per_grid_ts, attention_mask

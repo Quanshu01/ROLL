@@ -1,10 +1,13 @@
 import copy
 import json
 import os
+import uuid
 from functools import partial
+from io import BytesIO
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import datasets
+import numpy as np
 import PIL.Image as Image
 import ray
 import torch
@@ -118,10 +121,18 @@ def encode_function(
         if image is None:
             image_flag[idx] = False
         try:
-            image_out = load_images(image if isinstance(image, (list, tuple)) else [image], timeout=None)
+            if isinstance(image, bytes): # bytes data
+                # TODO: support multiple images
+                image_out = Image.open(BytesIO(image))
+            else:
+                image_out = load_images(image if isinstance(image, (list, tuple)) else [image], timeout=None)
         except Exception as e:
-            image_out = [Image.new("RGB", (224, 224), (255, 255, 255))] * len(image)
-            logger.error(f"Failed to get image: {image}")
+            if isinstance(image, bytes):
+                image_out = [Image.new("RGB", (224, 224), (255, 255, 255))]
+                logger.error(f"Failed to get image with type: {type(image)}")
+            else:
+                image_out = [Image.new("RGB", (224, 224), (255, 255, 255))] * len(image)
+                logger.error(f"Failed to get image: {image}")
         # since infer-image use pil image as input while train-engine use
         # processed data, process image here to make them use same image
         # refer to the following for Spatial Understanding with Qwen2.5-VL
@@ -313,13 +324,15 @@ class RLVRVLMPipeline(BasePipeline):
             resource_manager=self.resource_manager,
             worker_config=self.pipeline_config.actor_infer,
         )
-        self.reference: Any = Cluster(
-            name=self.pipeline_config.reference.name,
-            worker_cls=self.pipeline_config.reference.worker_cls,
-            resource_manager=self.resource_manager,
-            worker_config=self.pipeline_config.reference,
-        )
-        download_clusters = [self.actor_train, self.actor_infer, self.reference]
+        download_clusters = [self.actor_train, self.actor_infer]
+        if self.pipeline_config.enable_reference:
+            self.reference: Any = Cluster(
+                name=self.pipeline_config.reference.name,
+                worker_cls=self.pipeline_config.reference.worker_cls,
+                resource_manager=self.resource_manager,
+                worker_config=self.pipeline_config.reference,
+            )
+            download_clusters.append(self.reference)
         if self.pipeline_config.adv_estimator == "gae":
             self.critic: Any = Cluster(
                 name=self.pipeline_config.critic.name,
@@ -367,7 +380,6 @@ class RLVRVLMPipeline(BasePipeline):
                     collect_fn_kwargs=dict(
                         # tokenizer passed by DynamicSamplingScheduler.set_scheduler
                         # tokenizer=self.tokenizer,
-                        processor=self.processor,
                         extra_unpadded_keys=["domain", "reward_model"],
                         extra_data_provider=get_extra_data_provider(
                             self.pipeline_config.actor_train.model_args.model_name_or_path, processor=self.processor
@@ -383,6 +395,7 @@ class RLVRVLMPipeline(BasePipeline):
                     query_filter_fn=query_filter_fn,
                     response_callback_fn=generate_scheduler.report_response.remote,
                     state=self.state.kv.get(f"scheduler_state_{domain}", None),
+                    is_vlm=True,
                 )
             )
             self.generate_schedulers[domain] = generate_scheduler
@@ -411,7 +424,6 @@ class RLVRVLMPipeline(BasePipeline):
                     collect_fn_kwargs=dict(
                         # tokenizer passed by DynamicSamplingScheduler.set_scheduler
                         # tokenizer=self.tokenizer,
-                        processor=self.processor,
                         # val metrics are grouped by tag rather than domain
                         extra_unpadded_keys=["domain", "reward_model", "tag"],
                         extra_data_provider=get_extra_data_provider(
@@ -427,6 +439,7 @@ class RLVRVLMPipeline(BasePipeline):
                     response_filter_fn=lambda data_item, config: True,
                     query_filter_fn=lambda data_list, config: True,
                     response_callback_fn=self.val_generate_scheduler.report_response.remote,
+                    is_vlm=True,
                 )
             )
 
@@ -434,7 +447,8 @@ class RLVRVLMPipeline(BasePipeline):
         refs.extend(self.actor_infer.initialize(pipeline_config=self.pipeline_config, blocking=False))
         ray.get(refs)
 
-        refs.extend(self.reference.initialize(pipeline_config=self.pipeline_config, blocking=True))
+        if self.pipeline_config.enable_reference:
+            refs.extend(self.reference.initialize(pipeline_config=self.pipeline_config, blocking=True))
         refs = []
         for key, cluster in self.rewards.items():
             refs.extend(cluster.initialize(pipeline_config=self.pipeline_config, blocking=False))
@@ -469,6 +483,11 @@ class RLVRVLMPipeline(BasePipeline):
         actor_infer_timer = _Timer(window_size=5)
         actor_infer_response_timer = _Timer(window_size=5)
         actor_train_timer = _Timer(window_size=5)
+
+        metrics_mgr.timers["tps"] = tps_timer
+        metrics_mgr.timers["actor_infer"] = actor_infer_timer
+        metrics_mgr.timers["actor_infer_response"] = actor_infer_response_timer
+        metrics_mgr.timers["actor_train"] = actor_train_timer
 
         for global_step in range(self.pipeline_config.max_steps):
             if global_step <= self.state.step:
@@ -541,33 +560,44 @@ class RLVRVLMPipeline(BasePipeline):
                 # mark here to make megatron get_data_input broadcast with non_batch_tensor
                 batch.meta_info["_broadcast_non_tensor_batch"]= True
 
+                batch.non_tensor_batch['sample_uuid'] = np.array([str(uuid.uuid4()) for _ in range(batch.batch.shape[0])], dtype=object)
                 with Timer(name="cal_ref_log_probs", logger=None) as cal_ref_log_probs_timer:
-                    ref_log_probs = self.reference.compute_log_probs(batch, blocking=True)
-                    metrics_mgr.add_reduced_metrics(ref_log_probs.meta_info.pop("metrics", {}))
-                    ref_log_probs.rename(old_keys="log_probs", new_keys="ref_log_probs")
-                    batch = batch.union(ref_log_probs)
+                    if self.pipeline_config.enable_reference:
+                        ref_log_probs = self.reference.compute_log_probs(batch, blocking=True)
+                        metrics_mgr.add_reduced_metrics(ref_log_probs.meta_info.pop("metrics", {}))
+                        ref_log_probs.rename(old_keys="log_probs", new_keys="ref_log_probs")
+                        batch = batch.union(ref_log_probs)
                 metrics_mgr.add_metric("time/ref_log_probs_values", cal_ref_log_probs_timer.last)
 
                 with Timer(name="cal_old_log_probs_values", logger=None) as cal_old_logpb_timer:
                     batch.meta_info["is_offload_states"] = False
                     if self.pipeline_config.adv_estimator == "gae":
                         values_refs: List[ray.ObjectRef] = self.critic.compute_values(batch, blocking=False)
-                    old_log_probs_refs: List[ray.ObjectRef] = self.actor_train.compute_log_probs(batch, blocking=False)
-                    old_log_probs = DataProto.materialize_concat(data_refs=old_log_probs_refs)
-                    agg_entropy = agg_loss(
-                        loss_mat=old_log_probs.batch["entropy"],
-                        loss_mask=batch.batch["response_mask"][:, 1:],
-                        loss_agg_mode="token-mean",
-                    )
-                    batch.meta_info["agg_entropy"] = agg_entropy
+
+                    if self.pipeline_config.enable_old_logprobs_recompute:
+                        old_log_probs_refs: List[ray.ObjectRef] = self.actor_train.compute_log_probs(batch, blocking=False)
+                        old_log_probs = DataProto.materialize_concat(data_refs=old_log_probs_refs)
+                        agg_entropy = agg_loss(
+                            loss_mat=old_log_probs.batch["entropy"],
+                            loss_mask=batch.batch["response_mask"][:, 1:],
+                            loss_agg_mode="token-mean",
+                        )
+                        batch.meta_info["agg_entropy"] = agg_entropy
+
+                        batch.batch["old_log_probs"] = old_log_probs.batch["log_probs"]
+                        metrics_mgr.add_reduced_metrics(old_log_probs.meta_info.pop("metrics", {}))
+                    else:
+                        # Use zeros when optimization is enabled
+                        batch.batch["old_log_probs"] = torch.zeros_like(batch.batch["attention_mask"][:, 1:])
 
                     if self.pipeline_config.adv_estimator == "gae":
                         values = DataProto.materialize_concat(data_refs=values_refs)
                         batch = batch.union(values)
                         metrics_mgr.add_reduced_metrics(values.meta_info.pop("metrics", {}))
 
-                    batch.batch["old_log_probs"] = old_log_probs.batch["log_probs"]
-                    metrics_mgr.add_reduced_metrics(old_log_probs.meta_info.pop("metrics", {}))
+                    # Mock ref_log_probs using old_log_probs if reference is disabled
+                    if not self.pipeline_config.enable_reference:
+                        batch.batch["ref_log_probs"] = batch.batch["old_log_probs"].clone()
                 metrics_mgr.add_metric("time/old_log_probs", cal_old_logpb_timer.last)
 
                 # group by domain to process reward

@@ -59,6 +59,7 @@ class WandbTracker(BaseTracker):
         notes = kwargs.pop("notes", None)
         log_dir = kwargs.pop("log_dir", None)
         api_key = kwargs.pop("api_key", None)
+        mode = kwargs.pop("mode", None)
         settings = kwargs.pop("settings", {"console": "off"})
         import wandb
         if api_key:

@@ -3,26 +3,28 @@ import copy
 import gc
 import os
 import queue
+import threading
 import time
+from collections import defaultdict, deque
 from concurrent import futures
 from typing import Dict, List, Optional, Union
+from packaging.version import Version
 
-import ray
 import torch
 import torch.distributed as dist
 from torch.nn.utils.rnn import pad_sequence
 from transformers import set_seed
+import vllm
 from vllm import RequestOutput, SamplingParams
 from vllm.lora.request import LoRARequest
-from vllm.sampling_params import RequestOutputKind
+from vllm.sampling_params import RequestOutputKind, BeamSearchParams
 from vllm.utils import random_uuid
 
 from roll.distributed.executor.worker import Worker
-from roll.distributed.scheduler.protocol import DataProto
+from roll.distributed.scheduler.protocol import DataProto, list_of_dict_to_dict_of_list
 from roll.distributed.strategy.strategy import InferenceStrategy
 from roll.third_party.vllm import LLM, AsyncLLM
-from roll.utils.collective import collective
-from roll.utils.functionals import GenerateRequestType, concatenate_input_and_output
+from roll.utils.functionals import GenerateRequestType, concatenate_input_and_output, reduce_metrics
 from roll.utils.logging import get_logger
 from roll.utils.offload_states import OffloadStateType
 from roll.platforms import current_platform
@@ -43,6 +45,11 @@ class VllmStrategy(InferenceStrategy):
 
         self.request_metas = {}
         self.running = False
+        
+        # Metrics snapshot infrastructure
+        self._metrics_snapshots = deque(maxlen=3600)
+        self._metrics_snapshot_interval = 1.0  # Snapshot every 1 second
+        self._metrics_thread = None
 
     def initialize(self, model_provider):
         set_seed(seed=self.worker.pipeline_config.seed)
@@ -117,6 +124,12 @@ class VllmStrategy(InferenceStrategy):
 
         self.is_model_in_gpu = True
 
+        self._metrics_thread = threading.Thread(
+            target=self._collect_metrics_snapshot,
+            name="metrics-collection"
+        )
+        self._metrics_thread.start()
+
     def op_compute_log_probs(self, logits: torch.Tensor, input_ids: torch.Tensor, attention_mask: torch.Tensor):
         """
         vllm实现compute log probs在这里实现即可
@@ -124,6 +137,18 @@ class VllmStrategy(InferenceStrategy):
         pass
 
     def generate(self, batch: DataProto, generation_config) -> torch.Tensor:
+        # Check if beam search is requested
+        if self._should_use_beam_search(generation_config):
+            return self._generate_with_beam_search(batch, generation_config)
+        else:
+            return self._generate_standard(batch, generation_config)
+
+    def _should_use_beam_search(self, generation_config) -> bool:
+        """Check if beam search should be used based on generation_config."""
+        return generation_config.get("num_beams", 1) > 1 or generation_config.get("use_beam_search", False)
+
+    def _generate_standard(self, batch: DataProto, generation_config) -> torch.Tensor:
+        """Standard generate method for non-beam search cases."""
         sampling_params = create_sampling_params_for_vllm(gen_kwargs=generation_config)
 
         input_ids = batch.batch["input_ids"]  # (bs, prompt_length)
@@ -133,9 +158,16 @@ class VllmStrategy(InferenceStrategy):
         if "multi_modal_data" in batch.non_tensor_batch:
             vllm_input_args["prompts"] = batch.non_tensor_batch["multi_modal_data"]
         else:
-            vllm_input_args["prompt_token_ids"] = gather_unpadded_input_ids(
-                input_ids=input_ids, attention_mask=attention_mask
-            )
+            if Version(vllm.__version__) >= Version("0.11.0"):
+                from vllm.inputs import TokensPrompt
+                prompt_token_ids_list=gather_unpadded_input_ids(
+                    input_ids=input_ids, attention_mask=attention_mask
+                )
+                vllm_input_args["prompts"] = [TokensPrompt(prompt_token_ids=prompt_token_ids)for prompt_token_ids in prompt_token_ids_list]
+            else:
+                vllm_input_args["prompt_token_ids"] = gather_unpadded_input_ids(
+                    input_ids=input_ids, attention_mask=attention_mask
+                )
 
         lora_requests = None
         if self.is_lora:
@@ -166,6 +198,63 @@ class VllmStrategy(InferenceStrategy):
         # (bs * num_return_sequences, input_len + max_response_len)
         output = concatenate_input_and_output(
             input_ids=input_ids, output_ids=output_ids, num_return_sequences=sampling_params.n
+        )
+
+        return output
+
+    def _generate_with_beam_search(self, batch: DataProto, generation_config) -> torch.Tensor:
+        """Generate using beam search method."""
+        # Create beam search parameters
+        beam_params = BeamSearchParams(
+            beam_width=generation_config.get("num_beams", 1),
+            max_tokens=generation_config.get("max_new_tokens", 50),
+            temperature=generation_config.get("temperature", 0.0),
+            ignore_eos=generation_config.get("ignore_eos", False),
+            length_penalty=generation_config.get("length_penalty", 1.0),
+            include_stop_str_in_output=generation_config.get("include_stop_str_in_output", False),
+        )
+
+        input_ids = batch.batch["input_ids"]  # (bs, prompt_length)
+        attention_mask = batch.batch["attention_mask"]  # left-padded attention_mask
+
+        # Prepare prompts for beam_search
+        if "multi_modal_data" in batch.non_tensor_batch:
+            # For multimodal data, we need to handle it differently
+            # This is a simplified approach - may need refinement based on actual multimodal format
+            prompts = batch.non_tensor_batch["multi_modal_data"]
+        else:
+            # Convert to token lists format expected by beam_search
+            token_lists = gather_unpadded_input_ids(
+                input_ids=input_ids, attention_mask=attention_mask
+            )
+            # Convert to TokensPrompt format expected by vLLM beam_search
+            prompts = [{"prompt_token_ids": token_ids} for token_ids in token_lists]
+
+        # Call beam_search method
+        beam_search_outputs = self.model.beam_search(
+            prompts=prompts,
+            params=beam_params,
+        )
+
+        generated_token_ids = []
+        token_ids = [prompt['prompt_token_ids'] for prompt in prompts]
+        for batch_idx, output in enumerate(beam_search_outputs):
+            # Each output contains beam_width sequences
+            for beam_idx, sequence in enumerate(output.sequences):
+                # Get prompt length for this input
+                prompt_length = len(token_ids[batch_idx])
+                # Extract only the generated tokens (exclude prompt)
+                generated_tokens = sequence.tokens[prompt_length:]
+                generated_token_ids.append(torch.tensor(generated_tokens, device=input_ids.device))
+
+        # Pad the sequences
+        output_ids = pad_sequence(generated_token_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id)
+
+        # Concatenate input and output
+        output = concatenate_input_and_output(
+            input_ids=input_ids,
+            output_ids=output_ids,
+            num_return_sequences=beam_params.beam_width
         )
 
         return output
@@ -359,6 +448,44 @@ class VllmStrategy(InferenceStrategy):
     def add_lora(self, peft_config):
         self.model.add_lora(peft_config)
 
+    def _collect_metrics_snapshot(self):
+        """Collect metrics snapshots periodically in a background thread."""
+        try:
+            while True:
+                raw_metrics = self.model.get_metrics()
+                snapshot = {
+                    'vllm/kv_cache_usage_perc_max': [],
+                    'vllm/num_requests_waiting_max': [],
+                    'vllm/num_preemptions_max': []
+                }
+                for metric in raw_metrics:
+                    if metric.name == "vllm:kv_cache_usage_perc":
+                        snapshot['vllm/kv_cache_usage_perc_max'].append(metric.value)
+                    elif metric.name == "vllm:num_requests_waiting":
+                        snapshot['vllm/num_requests_waiting_max'].append(metric.value)
+                    elif metric.name == "vllm:num_preemptions":
+                        snapshot['vllm/num_preemptions_max'].append(metric.value)
+                self._metrics_snapshots.append(snapshot)
+
+                time.sleep(self._metrics_snapshot_interval)
+        except Exception as e:
+            logger.warning(f"Failed to get metrics: {e}")
+
+    def get_metrics(self, metric_names: Optional[List[str]] = None) -> Dict[str, float]:
+        """
+        Get aggregated metrics for the time interval since last call.
+
+        Args:
+            metric_names: Optional list of specific metric names to filter
+
+        Returns:
+            Dictionary of metric names to aggregated values
+        """
+        if not self._metrics_snapshots:
+            return {}
+        metrics_snapshots = list_of_dict_to_dict_of_list(self._metrics_snapshots)
+        self._metrics_snapshots.clear()
+        return reduce_metrics(metrics_snapshots)
 
 def gather_unpadded_input_ids(input_ids: torch.Tensor, attention_mask: torch.Tensor):
     gathered_input_ids = [ids[mask.bool()].tolist() for ids, mask in zip(input_ids, attention_mask)]
@@ -383,20 +510,6 @@ def create_sampling_params_for_vllm(gen_kwargs):
         assert gen_kwargs["num_return_sequences"] == 1, (
             "fetch_output only supports num_return_sequences=1 or output_kind=FINAL"
         )
-
-    if gen_kwargs["num_beams"] > 1:
-        return SamplingParams(
-            max_tokens=gen_kwargs["max_new_tokens"],
-            stop_token_ids=gen_kwargs["eos_token_id"],
-            repetition_penalty=gen_kwargs["repetition_penalty"],
-            n=gen_kwargs["num_return_sequences"],
-            best_of=gen_kwargs["num_beams"],
-            use_beam_search=True,
-            stop=gen_kwargs["stop_strings"],
-            logprobs=gen_kwargs.get("logprobs", 0),
-            output_kind=output_kind,
-            include_stop_str_in_output=gen_kwargs.get("include_stop_str_in_output", True),
-        )
     return SamplingParams(
         max_tokens=gen_kwargs["max_new_tokens"],
         temperature=gen_kwargs["temperature"],
@@ -410,35 +523,3 @@ def create_sampling_params_for_vllm(gen_kwargs):
         output_kind=output_kind,
         include_stop_str_in_output=gen_kwargs.get("include_stop_str_in_output", True),
     )
-
-
-def compare_sampling_params(params1: SamplingParams, params2: SamplingParams) -> bool:
-    # 只比较采样参数的配置
-    param_attrs = [
-        "temperature",
-        "top_p",
-        "top_k",
-        "max_tokens",
-        "n",
-        "stop_token_ids",
-        "presence_penalty",
-        "frequency_penalty",
-        "repetition_penalty",
-        "min_p",
-        "best_of",
-        "stop",
-        "ignore_eos",
-        "use_beam_search",
-        "best_of",
-        "use_beam_search",
-    ]
-
-    # 比较每个采样参数
-    for attr in param_attrs:
-        if hasattr(params1, attr) and hasattr(params2, attr):
-            val1 = getattr(params1, attr)
-            val2 = getattr(params2, attr)
-            if val1 != val2:
-                print(f"采样参数 {attr} 不同: {val1} != {val2}")
-                return False
-    return True

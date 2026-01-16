@@ -12,11 +12,11 @@ logger = get_logger()
 @dataclass
 class StrategyArguments:
     strategy_name: Literal[
-        "deepspeed_train", "hf_infer", "deepspeed_infer", "vllm", "sglang", "megatron_infer", "megatron_train", "diffusion_deepspeed_train"
+        "deepspeed_train", "hf_infer", "deepspeed_infer", "vllm", "sglang", "megatron_infer", "megatron_train", "mock_infer", "diffusion_deepspeed_train"
     ] = field(
         default="deepspeed_train",
         metadata={
-            "help": "The name of the strategy. Options: 'deepspeed_train', 'diffusion_deepspeed_train', 'hf_infer', 'deepspeed_infer', 'vllm', 'sglang', "
+            "help": "The name of the strategy. Options: 'deepspeed_train', 'diffusion_deepspeed_train', 'hf_infer', 'deepspeed_infer', 'mock_infer', 'vllm', 'sglang', "
             "'megatron_infer', 'megatron_train'."
         },
     )
@@ -144,6 +144,17 @@ class WorkerConfig:
         metadata={"help": "The value to round up to when truncating the sequence length."
                           "Note: This config must be set when using dynamic batching."}
     )
+    offload_nccl: bool = field(
+        default=False,
+        metadata={"help": "Whether offload nccl buffer to save gpu memory."}
+    )
+
+    # sequence packing
+    use_sequence_packing: bool = field(
+        default=False,
+        metadata={"help": "Concatenates multiple sequences into a single “packed” sequence, eliminating most padding. "
+                          "Only supported in the megatron strategy"}
+    )
 
     def __post_init__(self):
 
@@ -181,7 +192,6 @@ class WorkerConfig:
                 self.training_args.bf16 = True
             elif self.model_args.dtype == "fp16":
                 self.training_args.fp16 = True
-
 
 def is_colocated(actor_train: WorkerConfig, actor_infer: WorkerConfig):
     train_devices = set(actor_train.device_mapping or [])

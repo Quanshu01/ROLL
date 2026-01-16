@@ -27,6 +27,7 @@ from roll.utils.functionals import (
     GenerateRequestType,
     agg_loss,
 )
+from roll.utils.offload_nccl import reload_process_groups
 from roll.utils.offload_states import OffloadStateType
 from roll.utils.dynamic_batching import make_mini_batch_iter_for_dynamic_batching
 from roll.platforms import current_platform
@@ -42,6 +43,7 @@ class ActorWorker(Worker):
         self.server_metrics = {}
         self.thread_server = None
         self.offload_manager = None
+        self._logprobs_cache = {}
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def initialize(self, pipeline_config):
@@ -53,7 +55,7 @@ class ActorWorker(Worker):
             self.strategy.initialize(model_provider=default_diffusion_module_provider)
         else:
             self.strategy.initialize(model_provider=default_actor_model_provider)
-        
+
         self.tokenizer = self.strategy.tokenizer
         if self.pipeline_config.resume_from_checkpoint:
             load_dir = download_model(self.pipeline_config.resume_from_checkpoint)
@@ -112,6 +114,7 @@ class ActorWorker(Worker):
             metrics["actor/lr"] = self.strategy.scheduler.get_last_lr()[0]
             data.to("cpu")
 
+        self._logprobs_cache.clear()
         output = DataProto(meta_info={"metrics": metrics})
         return output
 
@@ -220,7 +223,6 @@ class ActorWorker(Worker):
         """
         return DataProto.from_dict(tensors={'log_probs': output})
         """
-        data = self.strategy.get_data_input(data)
         global_step = data.meta_info.get("global_step", 0)
         is_offload_states = data.meta_info.get("is_offload_states", True)
         metrics = {}
@@ -231,6 +233,7 @@ class ActorWorker(Worker):
             is_offload_states=is_offload_states,
             load_kwargs={"include": [OffloadStateType.model_params]},
         ):
+            data = self.strategy.get_data_input(data)
             data = data.to(current_platform.device_type)
             data.meta_info["micro_batch_size"] = self.worker_config.infer_batch_size
             with torch.no_grad():
@@ -257,6 +260,46 @@ class ActorWorker(Worker):
         entropy = self.strategy.op_compute_entropy(logits=output_tensor, attention_mask=data.batch["response_mask"])
         return log_probs, {"log_probs": log_probs.clone().detach(), "entropy": entropy.clone().detach()}
 
+    def get_old_log_probs_with_cache(self, data: DataProto, log_probs: torch.Tensor) -> torch.Tensor:
+        """
+        Get old_log_probs with intra-step caching when enable_old_logprobs_recompute == False.
+        When caching is enabled, the first forward pass log_probs can be reused as old_log_probs
+        since they are mathematically equivalent in on-policy settings.
+        This method can be overridden by subclasses for custom caching behavior.
+
+        Args:
+            data: DataProto containing input data and sample_uuids
+            log_probs: Current forward pass log_probs tensor
+
+        Returns:
+            old_log_probs tensor (detached, no gradients)
+        """
+        # Original computation path when caching is disabled
+        if self.pipeline_config.enable_old_logprobs_recompute or "sample_uuid" not in data.non_tensor_batch:
+            # When enable_old_logprobs_recompute=True, use the pre-computed old_log_probs from batch
+            return data.batch["old_log_probs"]
+
+        sample_uuids = data.non_tensor_batch["sample_uuid"]
+
+        # Check first sample_uuid for efficiency - if it exists, all likely exist
+        first_uuid = sample_uuids[0]
+        if first_uuid in self._logprobs_cache:
+            # All samples likely cached, retrieve all from cache
+            cached_old_log_probs = []
+
+            for sample_uuid in sample_uuids:
+                cached_old_log_probs.append(self._logprobs_cache[sample_uuid])
+
+            old_log_probs = torch.cat(cached_old_log_probs, dim=0).to(current_platform.device_type)
+        else:
+            # Cache miss - use current log_probs as old_log_probs (mathematically equivalent in on-policy)
+            old_log_probs = log_probs.detach()
+            if self.pipeline_config.ppo_epochs > 1:
+                for i, sample_uuid in enumerate(sample_uuids):
+                    self._logprobs_cache[sample_uuid] = old_log_probs[i : i + 1].cpu()
+
+        return old_log_probs
+
     def loss_func(self, data: DataProto, output_tensor: torch.Tensor):
         """
         Default PPO loss that only uses reward advantages.
@@ -264,18 +307,20 @@ class ActorWorker(Worker):
         """
 
         response_mask = data.batch["response_mask"][:, 1:].long()
-        ref_log_probs = data.batch["ref_log_probs"]
-        old_log_probs = data.batch["old_log_probs"]
+        # ref_log_probs 可能不存在（当 enable_reference=False 时），稍后使用 old_log_probs 作为替代
         advantages = data.batch["advantages"]
 
         log_probs = self.strategy.op_compute_log_probs(
             logits=output_tensor, input_ids=data.batch["input_ids"], attention_mask=data.batch["response_mask"]
         )
+        old_log_probs = self.get_old_log_probs_with_cache(data, log_probs)
+        # 如果 ref_log_probs 不存在，使用 old_log_probs 作为替代
+        ref_log_probs = data.batch.get("ref_log_probs", old_log_probs)
 
         ratio = (log_probs - old_log_probs).exp()
 
         pg_clip_low = self.pipeline_config.pg_clip_low if self.pipeline_config.use_pg_clip_range else self.pipeline_config.pg_clip
-        pg_clip_high = self.pipeline_config.pg_clip_high if self.pipeline_config.use_pg_clip_range else self.pipeline_config.pg_clip  
+        pg_clip_high = self.pipeline_config.pg_clip_high if self.pipeline_config.use_pg_clip_range else self.pipeline_config.pg_clip
         surr1 = ratio * advantages
         surr2 = ratio.clamp(1 - pg_clip_low, 1 + pg_clip_high) * advantages
         pg_loss = -torch.min(surr1, surr2)
@@ -334,6 +379,8 @@ class ActorWorker(Worker):
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def do_checkpoint(self, global_step):
+        if self.worker_config.offload_nccl:
+            reload_process_groups()
         with Timer("do_checkpoint") as total_timer:
             ckpt_id = f"checkpoint-{global_step}"
 
@@ -359,13 +406,16 @@ class ActorWorker(Worker):
             response_callback_fn: callable
         generation_config, 按request设置
         """
-        if command == GenerateRequestType.ALIVE_CHECK:
+        def alive_check():
             if self.thread_server is not None:
                 if not self.thread_server.is_alive():
                     raise Exception("thread server has stopped unexpectedly. check stderr for more info.")
+        if command == GenerateRequestType.ALIVE_CHECK:
+            alive_check()
             output = DataProto(meta_info={"request_counts": len(self.response_call_back_fns)})
             return output
         elif command == GenerateRequestType.ADD:
+            alive_check()
             assert "response_callback_fn" in data.meta_info, "response_callback_fn is not in data.meta_info"
             is_num_return_sequences_expand = data.meta_info.get("is_num_return_sequences_expand", False)
             if "generation_config" not in data.meta_info:
@@ -624,7 +674,8 @@ class ConstrainedActorWorker(ActorWorker):
 
     def loss_func(self, data: DataProto, output_tensor: torch.Tensor):
         response_mask = data.batch["response_mask"][:, 1:].long()
-        ref_log_probs = data.batch["ref_log_probs"]
+        # ref_log_probs 可能不存在（当 enable_reference=False 时），使用 old_log_probs 作为替代
+        ref_log_probs = data.batch.get("ref_log_probs", data.batch["old_log_probs"])
         old_log_probs = data.batch["old_log_probs"]
 
         reward_advantages = data.batch["advantages"]

@@ -8,9 +8,18 @@ import cloudpickle
 import torch
 from pydantic import ValidationError
 from vllm import LLM, EngineArgs, SamplingParams, envs
-from vllm.config import (CompilationConfig, StructuredOutputsConfig, 
-                         ModelDType, TokenizerMode,
-                         is_init_field)
+from vllm.config import (
+    CompilationConfig,
+    StructuredOutputsConfig,
+    is_init_field,
+)
+
+try:
+    # 0.11.1rc2.dev0+gc3a722fcb.d20251021 has import diff
+    from vllm.config.model import ModelDType, TokenizerMode
+except ImportError:
+    from vllm.config import ModelDType, TokenizerMode
+
 from vllm.model_executor.layers.quantization import QuantizationMethods
 from vllm.engine.arg_utils import (ConvertOption, EngineArgs, HfOverrides,
                                    PoolerConfig, RunnerOption)
@@ -189,10 +198,10 @@ class Llm0110(LLM):
         self.supported_tasks = supported_tasks
 
         # Load the Input/Output processor plugin if any
+        self.model_config = self.llm_engine.model_config
         io_processor_plugin = self.llm_engine.model_config.io_processor_plugin
         self.io_processor = get_io_processor(self.llm_engine.vllm_config,
                                              io_processor_plugin)
-
 
     def load_states(self):
         self.collective_rpc(method="load_states")
@@ -291,13 +300,13 @@ class Llm0110(LLM):
     def broadcast_parameter(self, *args, **kwargs):
         self.collective_rpc(method="broadcast_parameter", args=args, kwargs=kwargs)
 
-    def update_parameter(self, parameter_name, weight, ranks_in_worker):
+    def update_parameter(self, parameter_name, weight, ranks_in_worker, is_lora):
         if envs.VLLM_USE_V1:
             weight_dict = {
                 "dtype": weight.dtype,
                 "weight": weight.cpu().tolist()
             }
-        self.collective_rpc(method="update_parameter", args=(parameter_name, weight_dict, ranks_in_worker))
+        self.collective_rpc(method="update_parameter", args=(parameter_name, weight_dict, ranks_in_worker, is_lora))
 
     def update_parameter_in_bucket(self, meta_infos, buffer, ranks_in_worker):
         if envs.VLLM_USE_V1:

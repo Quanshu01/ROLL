@@ -1,5 +1,6 @@
 import json
 import os
+import uuid
 from typing import Any, Dict, List, Optional
 
 import ray
@@ -62,7 +63,7 @@ def encode_function(data_i, processor, prompt_key, answer_key, image_key):
             image_out = load_images(image if isinstance(image, (list, tuple)) else [image], timeout=None)
         except Exception as e:
             image_out = [Image.new("RGB", (224, 224), (255, 255, 255))]
-            logger.error(f"Failed to get image: {image}")
+            logger.error(f"Failed to get image due to {e}")
         # since infer-image use pil image as input while train-engine use
         # processed data, process image here to make them use same image
         image_out = process_images(image_out, processor)
@@ -222,7 +223,7 @@ class RLVRMathVLMPipeline(BasePipeline):
             worker_config=self.pipeline_config.actor_infer,
         )
         # use unwrapped model as reference for lora training
-        if not self.is_lora:
+        if not self.is_lora and self.pipeline_config.enable_reference:
             self.reference: Any = Cluster(
                 name=self.pipeline_config.reference.name,
                 worker_cls=self.pipeline_config.reference.worker_cls,
@@ -264,7 +265,7 @@ class RLVRMathVLMPipeline(BasePipeline):
         ray.get(refs)
 
         refs = []
-        if not self.is_lora:
+        if not self.is_lora and self.pipeline_config.enable_reference:
             refs.extend(self.reference.initialize(pipeline_config=self.pipeline_config, blocking=False))
         refs.extend(self.reward.initialize(pipeline_config=self.pipeline_config, blocking=False))
         ray.get(refs)
@@ -358,27 +359,27 @@ class RLVRMathVLMPipeline(BasePipeline):
                         batch.non_tensor_batch[key] = np.repeat(
                             value, self.actor_infer.worker_config.generating_args.num_return_sequences
                         )
+                    batch.non_tensor_batch['sample_uuid'] = np.array([str(uuid.uuid4()) for _ in range(batch.batch.shape[0])], dtype=object)
 
                     with Timer(name="cal_ref_log_probs_reward", logger=None) as cal_timer:
-                        if self.is_lora:
-                            batch.meta_info["disable_adapter"] = True
-                            batch.meta_info["is_offload_states"] = False
-                            ref_log_probs_refs: List[ray.ObjectRef] = self.actor_train.compute_log_probs(
-                                batch, blocking=False
-                            )
-                        else:
-                            ref_log_probs_refs: List[ray.ObjectRef] = self.reference.compute_log_probs(
-                                batch, blocking=False
-                            )
+                        if self.pipeline_config.enable_reference:
+                            if self.is_lora:
+                                batch.meta_info["disable_adapter"] = True
+                                batch.meta_info["is_offload_states"] = False
+                                ref_log_probs_refs: List[ray.ObjectRef] = self.actor_train.compute_log_probs(
+                                    batch, blocking=False
+                                )
+                            else:
+                                ref_log_probs_refs: List[ray.ObjectRef] = self.reference.compute_log_probs(
+                                    batch, blocking=False
+                                )
+                            ref_log_probs = DataProto.materialize_concat(data_refs=ref_log_probs_refs)
+                            metrics.update(reduce_metrics(ref_log_probs.meta_info.pop("metrics", {})))
+                            ref_log_probs.rename(old_keys="log_probs", new_keys="ref_log_probs")
+                            batch = batch.union(ref_log_probs)
                         rewards_refs: List[ray.ObjectRef] = self.reward.compute_rewards(batch, blocking=False)
-
-                        ref_log_probs = DataProto.materialize_concat(data_refs=ref_log_probs_refs)
                         rewards = DataProto.materialize_concat(data_refs=rewards_refs)
-
-                        metrics.update(reduce_metrics(ref_log_probs.meta_info.pop("metrics", {})))
                         metrics.update(reduce_metrics(rewards.meta_info.pop("metrics", {})))
-                        ref_log_probs.rename(old_keys="log_probs", new_keys="ref_log_probs")
-                        batch = batch.union(ref_log_probs)
                         batch = batch.union(rewards)
                     metrics["time/ref_log_probs_values_reward"] = cal_timer.last
 
@@ -388,17 +389,26 @@ class RLVRMathVLMPipeline(BasePipeline):
                         batch.meta_info["is_offload_states"] = False
                         if self.pipeline_config.adv_estimator == "gae":
                             values_refs: List[ray.ObjectRef] = self.critic.compute_values(batch, blocking=False)
-                        old_log_probs_refs: List[ray.ObjectRef] = self.actor_train.compute_log_probs(
-                            batch, blocking=False
-                        )
-                        old_log_probs = DataProto.materialize_concat(data_refs=old_log_probs_refs)
+
+                        if self.pipeline_config.enable_old_logprobs_recompute:
+                            old_log_probs_refs: List[ray.ObjectRef] = self.actor_train.compute_log_probs(
+                                batch, blocking=False
+                            )
+                            old_log_probs = DataProto.materialize_concat(data_refs=old_log_probs_refs)
+                            batch.batch["old_log_probs"] = old_log_probs.batch["log_probs"]
+                            metrics.update(reduce_metrics(old_log_probs.meta_info.pop("metrics", {})))
+                        else:
+                            # Use zeros when optimization is enabled
+                            batch.batch["old_log_probs"] = torch.zeros_like(batch.batch["attention_mask"][:, 1:])
+
                         if self.pipeline_config.adv_estimator == "gae":
                             values = DataProto.materialize_concat(data_refs=values_refs)
                             batch = batch.union(values)
                             metrics.update(reduce_metrics(values.meta_info.pop("metrics", {})))
 
-                        batch.batch["old_log_probs"] = old_log_probs.batch["log_probs"]
-                        metrics.update(reduce_metrics(old_log_probs.meta_info.pop("metrics", {})))
+                        # Mock ref_log_probs using old_log_probs if reference is disabled
+                        if not self.pipeline_config.enable_reference:
+                            batch.batch["ref_log_probs"] = batch.batch["old_log_probs"].clone()
 
                     metrics["time/old_log_probs"] = cal_old_logpb_timer.last
 

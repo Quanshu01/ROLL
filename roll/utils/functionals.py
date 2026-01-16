@@ -10,6 +10,7 @@ import torch.nn.functional as F
 from tensordict import TensorDict
 
 from roll.pipeline.rlvr.rlvr_config import RLVRConfig
+from roll.configs.base_config import PPOConfig
 from roll.platforms import current_platform
 from roll.utils.kl_controller import AdaptiveKLController
 from roll.utils.logging import get_logger
@@ -314,13 +315,26 @@ def get_eos_mask(response_id: torch.Tensor, eos_token: int = 2, dtype=torch.int6
     return eos_mask
 
 
-def get_pad_mask(response_id: torch.Tensor, pad_token: int = 0, dtype=torch.int64):
+def get_pad_mask(response_id: torch.Tensor, pad_token: int = 0, eos_token: int = 1, dtype=torch.int64):
     """
     e.g. pad token=0
     response_id: [1, 2, 2, 42, 3, 5, 1, 0, 0]
     pad_mask:     [1, 1, 1, 1,  1, 1, 1, 0, 0]
+    
+    If eos_token == pad_token, the first pad token (which is the eos token) should be kept.
+    e.g. pad_token=0, eos_token=0
+    response_id: [1, 2, 2, 42, 3, 5, 0, 0, 0]
+    pad_mask:     [1, 1, 1, 1,  1, 1, 1, 0, 0]  (first pad token/eos token is kept)
     """
     pad_mask = response_id.not_equal(pad_token).to(dtype)
+    
+    # eos_token == pad_token, 需要保留第一个pad token否则会误将eos token mask掉
+    if eos_token == pad_token:
+        pad_positions = response_id.eq(pad_token).to(dtype)
+        cumsum_pad = torch.cumsum(pad_positions, dim=-1)
+        first_pad_token = (cumsum_pad == 1).to(dtype)
+        pad_mask = pad_mask | first_pad_token
+    
     assert (
         not (pad_mask[:, 0] == 0).logical_and(pad_mask.sum(-1) != 0).any()
     ), f"response_id is not valid: {response_id}, pad_token is {pad_token}"
@@ -357,8 +371,55 @@ def response_level_masked_whiten(values: torch.Tensor, mask: torch.Tensor, shift
 
 
 def reduce_metrics(metrics: dict, reduce_func=np.mean) -> dict:
+    """
+    Reduce metrics with enhanced aggregation support based on metric name suffixes.
+    
+    Supported suffixes:
+    - _mean: arithmetic mean (default)
+    - _max: maximum value
+    - _min: minimum value  
+    - _p50: 50th percentile (median)
+    - _p99: 99th percentile
+    - _std: standard deviation
+    - _sum: sum of all values
+    
+    Args:
+        metrics: Dictionary of metric names to lists/tensors of values
+        reduce_func: Default reduction function (used for metrics without suffix)
+    
+    Returns:
+        Dictionary with reduced metric values
+    """
+    import numpy as np
+    
+    def _parse_suffix(metric_name):
+        """Parse aggregation method from metric name suffix."""
+        if metric_name.endswith('_mean'):
+            return np.mean
+        elif metric_name.endswith('_max'):
+            return np.max
+        elif metric_name.endswith('_min'):
+            return np.min
+        elif metric_name.endswith('_p50'):
+            return lambda x: np.percentile(x, 50)
+        elif metric_name.endswith('_p99'):
+            return lambda x: np.percentile(x, 99)
+        elif metric_name.endswith('_std'):
+            return np.std
+        elif metric_name.endswith('_sum'):
+            return np.sum
+        else:
+            return reduce_func
+    
     for key, val in metrics.items():
-        metrics[key] = reduce_func(val)
+        if isinstance(val, (list, tuple, np.ndarray)) and len(val) > 0:
+            # Use suffix-based aggregation if available
+            aggregation_func = _parse_suffix(key)
+            metrics[key] = float(aggregation_func(val))
+        else:
+            # Fallback to default reduction function
+            metrics[key] = reduce_func(val)
+    
     return metrics
 
 
@@ -670,7 +731,7 @@ def difficulty_mask(data: "DataProto", n_sample=-1, low_threshold=0.1, high_thre
 
 
 @torch.no_grad()
-def compute_token_reward(data: "DataProto", pipeline_config: RLVRConfig, kl_ctrl: AdaptiveKLController):
+def compute_token_reward(data: "DataProto", pipeline_config: PPOConfig, kl_ctrl: AdaptiveKLController):
     token_level_rewards = expand_to_token_level(data)
     beta = 0
     kld = compute_approx_kl(
@@ -1220,7 +1281,7 @@ def postprocess_generate(
     attention_mask = (
         attention_mask.unsqueeze(1).repeat(1, num_return_sequences, 1).view(output_batch_size, prompt_length)
     )
-    response_mask = get_pad_mask(response_id=response, pad_token=pad_token_id, dtype=attention_mask.dtype)
+    response_mask = get_pad_mask(response_id=response, pad_token=pad_token_id, eos_token=eos_token_id, dtype=attention_mask.dtype)
     attention_mask = torch.cat((attention_mask, response_mask), dim=-1)
 
     position_ids = prompts.batch["position_ids"]

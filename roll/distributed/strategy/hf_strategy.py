@@ -63,6 +63,7 @@ class HfInferStrategy(InferenceStrategy):
             attention_mask = data.batch["attention_mask"]
             position_ids = data.batch["position_ids"]
             forward_args = data.meta_info.get("forward_args", {})
+            position_ids = position_ids.to(input_ids.device)
             if position_ids.dim() == 3:
                 # qwen2vl mrope, maybe use a placeholder and let model generate position_ids
                 position_ids = position_ids.transpose(0, 1)  # (bsz, 3, seqlen) -> (3, bsz, seqlen)

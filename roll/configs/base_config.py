@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Dict, Literal, Optional, Union
 
 from roll.configs.worker_config import WorkerConfig, is_colocated
-from roll.utils.config_utils import validate_megatron_batch_size
+from roll.utils.config_utils import validate_megatron_batch_size, calculate_megatron_dp_size
 from roll.utils.logging import get_logger
 
 
@@ -81,6 +81,10 @@ class BaseConfig:
     save_steps: int = field(
         default=50,
         metadata={"help": "Save checkpoint every X update steps."}
+    )
+    max_ckpt_to_keep: int = field(
+        default=0,
+        metadata={"help": "Maximum number of checkpoints to keep. 0 means keep all checkpoints."}
     )
     logging_steps: int = field(
         default=1,
@@ -289,6 +293,19 @@ class BaseConfig:
                 if hasattr(attribute, "training_args"):
                     setattr(attribute.training_args, "max_steps", max_steps)
 
+    def validate_worker_config(self):
+        # check if current worker supports sequence packing
+        allowed_names = {
+            'student', 'teacher', 'sft_train',
+        }
+        for attr_name in dir(self):
+            attr = getattr(self, attr_name)
+            if isinstance(attr, WorkerConfig) and attr.use_sequence_packing:
+                if attr.name not in allowed_names:
+                    raise ValueError(
+                        f"Worker '{attr.name}' (from field '{attr_name}') don't support use sequence packing now"
+                    )
+
 @dataclass
 class PPOConfig(BaseConfig):
     # role related
@@ -355,7 +372,7 @@ class PPOConfig(BaseConfig):
     whiten_rewards: bool = field(default=False, metadata={"help": "Whiten the rewards before compute advantages."})
     whiten_advantages: bool = field(default=False, metadata={"help": "Whiten the advantage."})
     advantage_clip: float = field(default=None, metadata={"help": "advantage_clip value"})
-    adv_estimator: Literal["gae", "reinforce", "grpo", "gigpo", "step_reinforce"] = field(
+    adv_estimator: Literal["gae", "reinforce", "grpo", "gigpo", "step_reinforce", "agentic_reinforce"] = field(
         default="gae", metadata={"help": "advantage estimator: gae (GAE)."}
     )
     norm_mean_type: Literal["batch", "group", "running", None] = field(
@@ -382,6 +399,11 @@ class PPOConfig(BaseConfig):
         field(default="seq-mean-token-mean", metadata={"help": "Loss aggregation mode"})
     )
     dual_clip_loss: bool = field(default=False, metadata={"help": "Use dual clip loss"})
+    enable_reference: bool = field(
+        default=False, metadata={"help": "Whether to enable reference cluster for computing ref_log_probs."}
+    )
+    enable_old_logprobs_recompute: bool = field(default=False, metadata={"help": "Enable old_logprobs computation optimization for disable caching"})
+    force_disable_old_logprobs_recompute: bool = field(default=False, metadata={"help": "Force disable old_logprobs computation optimization for disable caching, priority is higher than enable_old_logprobs_recompute"})
 
     def __post_init__(self):
         super().__post_init__()
@@ -406,6 +428,15 @@ class PPOConfig(BaseConfig):
         self.actor_train.name = "actor_train"
         self.reference.name = "reference"
         self.critic.name = "critic"
+        if self.use_kl_loss or self.init_kl_coef > 0:
+            logger.warning(f"use_kl_loss or init_kl_coef > 0, enable_reference = True")
+            self.enable_reference = True
+        if self.force_disable_old_logprobs_recompute:
+            self.enable_old_logprobs_recompute = False
+        else:
+            self.set_old_logprobs_status()
+
+        logger.info(f"enable_old_logprobs_recompute: {self.enable_old_logprobs_recompute}\tenable_reference: {self.enable_reference}")
 
     def set_max_steps(self, max_steps: int):
         actor_backward_batch_size = (
@@ -433,6 +464,40 @@ class PPOConfig(BaseConfig):
         logger.info(f"actor train max_steps without dp_size: {self.actor_train.training_args.max_steps}")
         logger.info(f"critic train max_steps without dp_size: {self.critic.training_args.max_steps}")
         self.max_steps = max_steps
+
+    def set_old_logprobs_status(self):
+        batch_size = self.rollout_batch_size * self.actor_infer.generating_args.num_return_sequences
+        actor_backward_batch_size = (
+            self.actor_train.training_args.per_device_train_batch_size
+            * self.actor_train.training_args.gradient_accumulation_steps
+        )
+        dp_size = 1
+        if self.actor_train.strategy_args is not None:
+            if self.actor_train.strategy_args.strategy_name == "deepspeed_train":
+                dp_size = len(self.actor_train.device_mapping)
+            elif self.actor_train.strategy_args.strategy_name == "megatron_train":
+                strategy_config = self.actor_train.strategy_args.strategy_config
+                tp = strategy_config.get('tensor_model_parallel_size', 1)
+                pp = strategy_config.get('pipeline_model_parallel_size', 1)
+                cp = strategy_config.get('context_parallel_size', 1)
+                dp_size = calculate_megatron_dp_size(num_gpus=len(self.actor_train.device_mapping),
+                                                     tensor_parallel_size=tp,
+                                                     pipeline_parallel_size=pp,
+                                                     context_parallel_size=cp)
+
+        # Calculate backward steps per DP rank
+        backward_steps_per_rank = (batch_size // dp_size) // actor_backward_batch_size
+
+        # Disable optimization only when multiple backward steps in single training step
+        # Multi-epoch training is actually a key scenario for optimization
+        if backward_steps_per_rank > 1:
+            # Multiple backward steps means model parameters change during training
+            # Cannot reuse cached logprobs across backward passes
+            self.enable_old_logprobs_recompute = True
+
+        if self.init_kl_coef > 0:
+            logger.warning(f"init_kl_coef > 0, enable_old_logprobs_recompute = True")
+            self.enable_old_logprobs_recompute = True
 
     @property
     def async_pipeline(self) -> bool:

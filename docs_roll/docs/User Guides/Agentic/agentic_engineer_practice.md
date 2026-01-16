@@ -233,7 +233,7 @@ def formulate_rollouts(self, rollout_cache: RolloutCache):
     lm_input.non_tensor_batch["episode_score"] = np.array([episode_score], dtype=object)
     
     # Configure database field types
-    colummns_config = [
+    columns_config = [
         ["task_idx", "bigint"],
         ["model_name", "string"],
         ["stop_reason", "string"],
@@ -241,7 +241,7 @@ def formulate_rollouts(self, rollout_cache: RolloutCache):
         ["mode", "string"],
         ["save_content", "string"],
     ]
-    lm_input.meta_info["COLUMMNS_CONFIG"] = colummns_config
+    lm_input.meta_info["COLUMNS_CONFIG"] = columns_config
     
     return lm_input
 ```
