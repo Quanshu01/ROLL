@@ -14,6 +14,10 @@ hydra:
 # ============ PPO 参数验证实验 ============
 exp_name: "ppo_param_search_qwen3"
 seed: 42
+
+# ============ 数据配置（便于通过 Hydra override 替换）============
+# 使用方法: task_config_path=evaluation_examples/test_genearl_harm_500.json
+task_config_path: evaluation_examples/test_genearl_harm_200.json
 logging_dir: ./output/logs
 output_dir: ./output
 rollout_dump_dir: /data/share/projects/quanshu/ROLL/output/rollouts/agentic_pipeline_osworld
@@ -228,7 +232,7 @@ custom_envs:
       observation_type: terminal
       action_space: pyautogui
       headless: true
-      task_config_path: evaluation_examples/test_genearl_harm_200.json
+      task_config_path: ${task_config_path}
       format_penalty: ${osworld_format_penalty}
       server_log_dir: ${oc.env:HYDRA_RUN_DIR,./output/logs/osworld_fallback}
       path_to_vm: js2.blockelite.cn:12923:12976
@@ -264,7 +268,7 @@ custom_envs:
       observation_type: terminal
       action_space: pyautogui
       headless: true
-      task_config_path: evaluation_examples/test_genearl_harm_200.json
+      task_config_path: ${task_config_path}
       format_penalty: ${osworld_format_penalty}
       server_log_dir: ${oc.env:HYDRA_RUN_DIR,./output/logs/osworld_fallback}
       path_to_vm: js1.blockelite.cn:26031:26088
@@ -300,7 +304,7 @@ custom_envs:
       observation_type: terminal
       action_space: pyautogui
       headless: true
-      task_config_path: evaluation_examples/test_genearl_harm_200.json
+      task_config_path: ${task_config_path}
       format_penalty: ${osworld_format_penalty}
       server_log_dir: ${oc.env:HYDRA_RUN_DIR,./output/logs/osworld_fallback}
       path_to_vm: js2.blockelite.cn:12923:12976
@@ -336,7 +340,7 @@ custom_envs:
       observation_type: terminal
       action_space: pyautogui
       headless: true
-      task_config_path: evaluation_examples/test_genearl_harm_200.json
+      task_config_path: ${task_config_path}
       format_penalty: ${osworld_format_penalty}
       server_log_dir: ${oc.env:HYDRA_RUN_DIR,./output/logs/osworld_fallback}
       path_to_vm: js1.blockelite.cn:26031:26088
