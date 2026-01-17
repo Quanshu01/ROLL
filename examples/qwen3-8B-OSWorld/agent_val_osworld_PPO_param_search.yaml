@@ -49,14 +49,14 @@ num_nodes: 1
 #   - max_steps = 数据量 / rollout_batch_size × epoch数
 #   - 例：500条 / 20 × 2 = 50步
 #
-# VM利用率参考：
+# VM利用率参考（Train和Val复用，无需预留）：
 #   | VM数量 | rollout_batch_size | val_batch_size | max_steps (500条, 2epoch) |
 #   |--------|-------------------|----------------|---------------------------|
-#   | 10     | 8                 | 2              | 125                       |
-#   | 20     | 16                | 4              | 63                        |
-#   | 30     | 20                | 6              | 50                        |
+#   | 20     | 20                | 6              | 50                        |
+#   | 30     | 30                | 6              | 34                        |
+#   | 40     | 40                | 8              | 25                        |
 #
-max_steps: 50                    # 500条/20 × 2 = 50步
+max_steps: 25                    # 500条/40 × 2 = 25步（2个epoch）
 save_steps: 25                   # 每个epoch保存一次
 logging_steps: 5
 eval_steps: 25                   # epoch结束时验证
@@ -65,12 +65,15 @@ resume_from_checkpoint: false
 # ============ Batch 配置 ============
 # ⚠️ 重要约束：
 #   1. rollout_batch_size = train_env_manager.num_env_groups
-#   2. val_batch_size = val_env_manager.num_env_groups  
+#   2. val_batch_size <= rollout_batch_size（Val复用Train的VM，无需额外VM）
 #   3. custom_envs 中必须定义足够多的 OSWorldN 环境
 #
-# 当前配置基于 30台VM：训练20台 + 验证6台 + 预留4台
-rollout_batch_size: 20           # 训练时并行rollout数量
-val_batch_size: 6                # 验证时并行数量
+# 资源分配策略（Train和Val串行执行，可完全复用）：
+#   - 训练使用全部40台VM
+#   - 验证复用其中8台（OSWorld1-8）
+#   - 无需预留冗余
+rollout_batch_size: 40           # 训练时并行rollout数量（全部40台）
+val_batch_size: 8                # 验证时并行数量（复用Train的VM）
 sequence_length: 8192
 
 # ============ PPO 核心超参数（验证重点）============
@@ -185,27 +188,27 @@ reward_normalization:
   method: identity
 
 # ============ 环境管理器配置 ============
-# 30台VM建议配置：训练20台 + 验证6台 + 预留4台（故障恢复）
+# 资源分配策略：Train 和 Val 串行执行，Val 复用 Train 的 VM
 # 
 # 重要配置约束：
-#   1. num_env_groups 必须与 rollout_batch_size / val_batch_size 相等
-#   2. tags 数组长度必须与 num_env_groups 相等
-#   3. num_groups_partition 定义每个 tag 分配的组数，总和必须等于 num_env_groups
-#   4. custom_envs 中必须定义所有 tags 引用的环境（OSWorld1-20）
+#   1. train: num_env_groups = rollout_batch_size = 40（全部VM）
+#   2. val: num_env_groups = val_batch_size = 8（复用OSWorld1-8）
+#   3. val 的 tags 必须是 train 的 tags 的子集
+#   4. custom_envs 中必须定义 OSWorld1-40
 #
 train_env_manager:
   max_env_num_per_worker: 1
-  num_env_groups: 20             # 并行训练环境数 = rollout_batch_size
+  num_env_groups: 40             # 并行训练环境数 = rollout_batch_size = 全部40台
   group_size: 1
-  tags: [OSWorld1, OSWorld2, OSWorld3, OSWorld4, OSWorld5, OSWorld6, OSWorld7, OSWorld8, OSWorld9, OSWorld10, OSWorld11, OSWorld12, OSWorld13, OSWorld14, OSWorld15, OSWorld16, OSWorld17, OSWorld18, OSWorld19, OSWorld20]
-  num_groups_partition: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+  tags: [OSWorld1, OSWorld2, OSWorld3, OSWorld4, OSWorld5, OSWorld6, OSWorld7, OSWorld8, OSWorld9, OSWorld10, OSWorld11, OSWorld12, OSWorld13, OSWorld14, OSWorld15, OSWorld16, OSWorld17, OSWorld18, OSWorld19, OSWorld20, OSWorld21, OSWorld22, OSWorld23, OSWorld24, OSWorld25, OSWorld26, OSWorld27, OSWorld28, OSWorld29, OSWorld30, OSWorld31, OSWorld32, OSWorld33, OSWorld34, OSWorld35, OSWorld36, OSWorld37, OSWorld38, OSWorld39, OSWorld40]
+  num_groups_partition: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 
 val_env_manager:
   max_env_num_per_worker: 1
-  num_env_groups: 6              # 验证环境数 = val_batch_size
+  num_env_groups: 8              # 验证环境数 = val_batch_size（复用OSWorld1-8）
   group_size: 1
-  tags: [OSWorld1, OSWorld2, OSWorld3, OSWorld4, OSWorld5, OSWorld6]
-  num_groups_partition: [1, 1, 1, 1, 1, 1]
+  tags: [OSWorld1, OSWorld2, OSWorld3, OSWorld4, OSWorld5, OSWorld6, OSWorld7, OSWorld8]
+  num_groups_partition: [1, 1, 1, 1, 1, 1, 1, 1]
 
 max_tokens_per_step: 512
 

@@ -46,12 +46,12 @@ TS=$(date +%Y%m%d-%H%M%S)
 
 case $EXP_ID in
     # ========== 阶段1: 快速筛选（100条数据）==========
-    # 100条 / rollout_batch_size(20) × 1 epoch = 5步
-    # 为了稳定性，运行2个epoch = 10步
+    # 100条 / rollout_batch_size(40) × 2 epoch = 5步
+    # Train和Val复用VM，全部40台用于训练
     "1")
         # 实验组1: 基线 - 保守学习率
         EXP_NAME="param_search_exp1_conservative_lr-${TS}"
-        OVERRIDES="max_steps=10 \
+        OVERRIDES="max_steps=5 \
                    actor_train.training_args.learning_rate=5e-7 \
                    critic.training_args.learning_rate=5e-6 \
                    ppo_epochs=1"
@@ -59,7 +59,7 @@ case $EXP_ID in
     "2")
         # 实验组2: 基线 - 标准学习率
         EXP_NAME="param_search_exp2_standard_lr-${TS}"
-        OVERRIDES="max_steps=10 \
+        OVERRIDES="max_steps=5 \
                    actor_train.training_args.learning_rate=1e-6 \
                    critic.training_args.learning_rate=1e-5 \
                    ppo_epochs=1"
@@ -67,7 +67,7 @@ case $EXP_ID in
     "3")
         # 实验组3: 较大学习率 + ppo_epochs=2
         EXP_NAME="param_search_exp3_higher_lr_ppo2-${TS}"
-        OVERRIDES="max_steps=10 \
+        OVERRIDES="max_steps=5 \
                    actor_train.training_args.learning_rate=2e-6 \
                    critic.training_args.learning_rate=1e-5 \
                    ppo_epochs=2"
@@ -75,18 +75,18 @@ case $EXP_ID in
     "4")
         # 实验组4: 激进学习率
         EXP_NAME="param_search_exp4_aggressive_lr-${TS}"
-        OVERRIDES="max_steps=10 \
+        OVERRIDES="max_steps=5 \
                    actor_train.training_args.learning_rate=5e-6 \
                    critic.training_args.learning_rate=2e-5 \
                    ppo_epochs=2"
         ;;
 
     # ========== 阶段2: 完整验证（500条数据）==========
-    # 500条 / rollout_batch_size(20) × 2 epoch = 50步
+    # 500条 / rollout_batch_size(40) × 2 epoch = 25步
     "full1")
         # 完整验证1: 推荐配置
         EXP_NAME="param_search_full1_recommended-${TS}"
-        OVERRIDES="max_steps=20 \
+        OVERRIDES="max_steps=25 \
                    actor_train.training_args.learning_rate=1.5e-6 \
                    critic.training_args.learning_rate=1e-5 \
                    ppo_epochs=2 \
@@ -96,7 +96,7 @@ case $EXP_ID in
     "full2")
         # 完整验证2: 较大学习率
         EXP_NAME="param_search_full2_higher_lr-${TS}"
-        OVERRIDES="max_steps=20 \
+        OVERRIDES="max_steps=25 \
                    actor_train.training_args.learning_rate=2e-6 \
                    critic.training_args.learning_rate=1e-5 \
                    ppo_epochs=2 \
@@ -105,7 +105,7 @@ case $EXP_ID in
     "full3")
         # 完整验证3: 更多PPO epochs
         EXP_NAME="param_search_full3_ppo4-${TS}"
-        OVERRIDES="max_steps=20 \
+        OVERRIDES="max_steps=25 \
                    actor_train.training_args.learning_rate=1e-6 \
                    critic.training_args.learning_rate=1e-5 \
                    ppo_epochs=4 \
